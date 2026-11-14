@@ -178,12 +178,52 @@ public sealed partial class WslMountService
         log?.Invoke($"Running: wsl.exe {string.Join(' ', mountArgs)}");
         WslCommandResult mountResult = await _runner.RunAsync(mountArgs, cancellationToken).ConfigureAwait(false);
 
+        // If WSL2 reports that the disk/partition/mount-name is already mounted or attached:
+        // 1) Check if /mnt/wsl/<mountName> is already actively mounted read-only in /proc/mounts; if so, reuse it.
+        // 2) Otherwise, detach the stale disk state via `wsl --unmount <target>` and retry `wsl --mount` once.
+        if (mountResult.ExitCode != 0 && ContainsAlreadyMountedOrAttached(mountResult))
+        {
+            log?.Invoke($"wsl --mount reported existing attachment/mount ({CombineOutput(mountResult)}). Checking /proc/mounts...");
+
+            var existingMounts = await GetActiveMountsAsync(distro, cancellationToken).ConfigureAwait(false);
+            var existingSameMount = existingMounts.FirstOrDefault(m =>
+                m.MountName.Equals(mountName, StringComparison.OrdinalIgnoreCase));
+
+            if (existingSameMount is not null && existingSameMount.IsReadOnly)
+            {
+                log?.Invoke($"Found existing read-only mount at {existingSameMount.WslMountPoint}; reusing and mapping drive letter {driveLetter}:...");
+                usedOptions = existingSameMount.MountOptions;
+                mountResult = new WslCommandResult(0, string.Empty, string.Empty);
+            }
+            else
+            {
+                log?.Invoke($"Detaching stale WSL2 disk state: wsl.exe --unmount {targetDiskArg}");
+                var unmountRes = await _runner.RunAsync(["--unmount", targetDiskArg], cancellationToken).ConfigureAwait(false);
+                if (unmountRes.ExitCode != 0)
+                {
+                    log?.Invoke($"wsl --unmount returned {unmountRes.ExitCode}: {CombineOutput(unmountRes)}");
+                }
+
+                log?.Invoke($"Retrying: wsl.exe {string.Join(' ', mountArgs)}");
+                mountResult = await _runner.RunAsync(mountArgs, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         // Retry with plain `ro` if `ro,noload` was rejected by a non-ext filesystem or WSL kernel version.
         if (mountResult.ExitCode != 0 &&
             usedOptions == "ro,noload" &&
-            !ContainsSharingViolation(mountResult))
+            !ContainsSharingViolation(mountResult) &&
+            !ContainsAlreadyMountedOrAttached(mountResult))
         {
-            log?.Invoke("Mount with `ro,noload` failed; retrying with `ro`...");
+            log?.Invoke($"Mount with `ro,noload` failed ({CombineOutput(mountResult)}); retrying with `ro`...");
+
+            // If the failed `ro,noload` attempt left the physical disk attached in wslservice.exe,
+            // detach it first so the `ro` retry does not fail with WSL_E_DISK_ALREADY_ATTACHED / ALREADY_MOUNTED.
+            if (ContainsMountFailed(mountResult))
+            {
+                _ = await _runner.RunAsync(["--unmount", targetDiskArg], cancellationToken).ConfigureAwait(false);
+            }
+
             mountArgs = BuildMountArguments(request, forceSimpleRo: true);
             usedOptions = "ro";
             log?.Invoke($"Running: wsl.exe {string.Join(' ', mountArgs)}");
@@ -195,7 +235,9 @@ public sealed partial class WslMountService
             string details = CombineOutput(mountResult);
             string hint = ContainsSharingViolation(mountResult)
                 ? " (This physical disk appears to contain volumes currently mounted by Windows. Only separate physical disks or .vhdx files can be attached to WSL2.)"
-                : string.Empty;
+                : ContainsAlreadyMountedOrAttached(mountResult)
+                    ? " (WSL2 holds a stale disk attachment state. Run `wsl --shutdown` once and retry.)"
+                    : string.Empty;
             return new MountOperationResult(false, null, $"wsl --mount failed (exit {mountResult.ExitCode}): {details}{hint}");
         }
 
@@ -250,10 +292,11 @@ public sealed partial class WslMountService
         string? vhdPath = null,
         string? distroName = null,
         Action<string>? log = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? mountName = null)
     {
         string? inferredDiskTarget = null;
-        string? mountName = null;
+        string? resolvedMountName = !string.IsNullOrWhiteSpace(mountName) ? mountName.Trim() : null;
 
         if (driveLetter.HasValue)
         {
@@ -262,15 +305,10 @@ public sealed partial class WslMountService
             var mapped = DriveMapper.GetMappedNetworkDrives();
             if (mapped.TryGetValue(local, out string? unc))
             {
-                var nameMatch = UncMountNameRegex().Match(unc);
+                var nameMatch = UncMountNameRegex().Match(unc.TrimEnd('\\', '/'));
                 if (nameMatch.Success)
                 {
-                    mountName = nameMatch.Groups["name"].Value;
-                    var diskMatch = AutoMountNameDiskRegex().Match(mountName);
-                    if (diskMatch.Success && int.TryParse(diskMatch.Groups["disk"].Value, out int parsedDisk))
-                    {
-                        inferredDiskTarget = $@"\\.\PhysicalDrive{parsedDisk}";
-                    }
+                    resolvedMountName ??= nameMatch.Groups["name"].Value;
                 }
             }
 
@@ -279,48 +317,63 @@ public sealed partial class WslMountService
             log?.Invoke(unmapResult.Message);
         }
 
+        if (!string.IsNullOrWhiteSpace(resolvedMountName))
+        {
+            var diskMatch = AutoMountNameDiskRegex().Match(resolvedMountName);
+            if (diskMatch.Success && int.TryParse(diskMatch.Groups["disk"].Value, out int parsedDisk))
+            {
+                inferredDiskTarget = $@"\\.\PhysicalDrive{parsedDisk}";
+            }
+        }
+
         string? unmountTarget = !string.IsNullOrWhiteSpace(vhdPath)
             ? vhdPath
             : diskIndex.HasValue
                 ? $@"\\.\PhysicalDrive{diskIndex.Value}"
                 : inferredDiskTarget;
 
-        // If we know the mountName inside WSL, first umount /mnt/wsl/<mountName> gracefully.
         string? distro = !string.IsNullOrWhiteSpace(distroName)
             ? distroName.Trim()
             : await GetDefaultDistroAsync(cancellationToken).ConfigureAwait(false);
 
         bool otherPartitionsRemainOnSameBaseDevice = false;
-        if (!string.IsNullOrWhiteSpace(mountName) && !string.IsNullOrWhiteSpace(distro))
+        MountSession? targetSession = null;
+        if (!string.IsNullOrWhiteSpace(resolvedMountName) && !string.IsNullOrWhiteSpace(distro))
         {
             var active = await GetActiveMountsAsync(distro, cancellationToken).ConfigureAwait(false);
-            var targetSession = active.FirstOrDefault(m =>
-                m.MountName.Equals(mountName, StringComparison.OrdinalIgnoreCase));
+            targetSession = active.FirstOrDefault(m =>
+                m.MountName.Equals(resolvedMountName, StringComparison.OrdinalIgnoreCase));
 
             if (targetSession is not null)
             {
+                unmountTarget ??= targetSession.TargetWslDiskPath;
                 string baseDev = GetBaseBlockDevice(targetSession.SourceDeviceInWsl);
                 otherPartitionsRemainOnSameBaseDevice = !string.IsNullOrEmpty(baseDev) &&
                     active.Any(m =>
-                        !m.MountName.Equals(mountName, StringComparison.OrdinalIgnoreCase) &&
+                        !m.MountName.Equals(resolvedMountName, StringComparison.OrdinalIgnoreCase) &&
                         GetBaseBlockDevice(m.SourceDeviceInWsl).Equals(baseDev, StringComparison.OrdinalIgnoreCase));
-
-                log?.Invoke($"Running: wsl.exe -d {distro} -u root -- umount {targetSession.WslMountPoint}");
-                _ = await _runner.RunAsync(
-                    ["-d", distro, "-u", "root", "--", "umount", targetSession.WslMountPoint],
-                    cancellationToken).ConfigureAwait(false);
             }
         }
 
         if (!string.IsNullOrWhiteSpace(unmountTarget))
         {
-            if (otherPartitionsRemainOnSameBaseDevice)
+            if (otherPartitionsRemainOnSameBaseDevice && targetSession is not null && !string.IsNullOrWhiteSpace(distro))
             {
+                // Another partition on the same disk is still mounted, so only umount this partition inside WSL
+                // without detaching the entire physical disk from the WSL2 VM.
+                log?.Invoke($"Running: wsl.exe -d {distro} -u root -- umount {targetSession.WslMountPoint}");
+                _ = await _runner.RunAsync(
+                    ["-d", distro, "-u", "root", "--", "umount", targetSession.WslMountPoint],
+                    cancellationToken).ConfigureAwait(false);
+
                 return new UnmountOperationResult(
                     true,
-                    $"Unmounted {mountName} and removed drive mapping; physical disk {unmountTarget} kept attached because another partition is still mounted.");
+                    $"Unmounted {resolvedMountName} and removed drive mapping; physical disk {unmountTarget} kept attached because another partition is still mounted.");
             }
 
+            // Let `wsl.exe --unmount <unmountTarget>` cleanly unmount /mnt/wsl/<name> and detach the disk in wslservice.exe.
+            // IMPORTANT: Do NOT run `umount /mnt/wsl/<name>` before `wsl --unmount`, as `wslservice.exe` requires the
+            // mountpoint to still be mounted when `mini_init` detaches the disk.
             log?.Invoke($"Running: wsl.exe --unmount {unmountTarget}");
             var wslUnmount = await _runner.RunAsync(["--unmount", unmountTarget], cancellationToken).ConfigureAwait(false);
             if (wslUnmount.ExitCode != 0)
@@ -330,6 +383,15 @@ public sealed partial class WslMountService
             }
 
             return new UnmountOperationResult(true, $"Successfully unmounted {unmountTarget}.");
+        }
+
+        // Fallback if we only know the mount point inside WSL but not the host disk/VHD path
+        if (targetSession is not null && !string.IsNullOrWhiteSpace(distro))
+        {
+            log?.Invoke($"Running: wsl.exe -d {distro} -u root -- umount {targetSession.WslMountPoint}");
+            _ = await _runner.RunAsync(
+                ["-d", distro, "-u", "root", "--", "umount", targetSession.WslMountPoint],
+                cancellationToken).ConfigureAwait(false);
         }
 
         return driveLetter.HasValue
@@ -388,7 +450,10 @@ public sealed partial class WslMountService
             }
 
             string mountName = mountPoint["/mnt/wsl/".Length..];
-            if (string.IsNullOrWhiteSpace(mountName) || mountName.Contains('/'))
+            if (string.IsNullOrWhiteSpace(mountName) ||
+                mountName.Contains('/') ||
+                mountName.Equals("wslg", StringComparison.OrdinalIgnoreCase) ||
+                mountName.Equals("resolv.conf", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -400,14 +465,22 @@ public sealed partial class WslMountService
             string resolvedUnc = expectedUnc;
             foreach (var kv in mappedDrives)
             {
-                if (kv.Value.Equals(expectedUnc, StringComparison.OrdinalIgnoreCase) ||
-                    kv.Value.Equals(legacyUnc, StringComparison.OrdinalIgnoreCase) ||
-                    kv.Value.EndsWith($@"\mnt\wsl\{mountName}", StringComparison.OrdinalIgnoreCase))
+                string candidateUnc = kv.Value.TrimEnd('\\', '/');
+                if (candidateUnc.Equals(expectedUnc, StringComparison.OrdinalIgnoreCase) ||
+                    candidateUnc.Equals(legacyUnc, StringComparison.OrdinalIgnoreCase) ||
+                    candidateUnc.EndsWith($@"\mnt\wsl\{mountName}", StringComparison.OrdinalIgnoreCase))
                 {
                     matchedDrive = kv.Key;
-                    resolvedUnc = kv.Value;
+                    resolvedUnc = candidateUnc;
                     break;
                 }
+            }
+
+            string? inferredTargetDisk = null;
+            var diskMatch = AutoMountNameDiskRegex().Match(mountName);
+            if (diskMatch.Success && int.TryParse(diskMatch.Groups["disk"].Value, out int parsedDisk))
+            {
+                inferredTargetDisk = $@"\\.\PhysicalDrive{parsedDisk}";
             }
 
             bool isRo = options.Split(',').Any(o => o.Equals("ro", StringComparison.OrdinalIgnoreCase));
@@ -420,7 +493,8 @@ public sealed partial class WslMountService
                 MappedDriveLetter = matchedDrive,
                 FileSystemType = fsType,
                 MountOptions = options,
-                IsReadOnly = isRo
+                IsReadOnly = isRo,
+                TargetWslDiskPath = inferredTargetDisk
             });
         }
 
@@ -452,6 +526,26 @@ public sealed partial class WslMountService
         string text = $"{result.StandardOutput}\n{result.StandardError}";
         return text.Contains("SHARING_VIOLATION", StringComparison.OrdinalIgnoreCase) ||
                text.Contains("0x80070020", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsAlreadyMountedOrAttached(WslCommandResult result)
+    {
+        string text = $"{result.StandardOutput}\n{result.StandardError}";
+        return text.Contains("WSL_E_DISK_ALREADY_MOUNTED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("0x80040319", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("WSL_E_DISK_ALREADY_ATTACHED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("0x80040318", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("WSL_E_VM_MODE_MOUNT_NAME_ALREADY_EXISTS", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("0x80040314", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("WSL_E_USER_VHD_ALREADY_ATTACHED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("0x80040312", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsMountFailed(WslCommandResult result)
+    {
+        string text = $"{result.StandardOutput}\n{result.StandardError}";
+        return text.Contains("WSL_E_DISK_MOUNT_FAILED", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("0x8004031a", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CombineOutput(WslCommandResult result)

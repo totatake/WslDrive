@@ -84,6 +84,13 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 - **運用・設計上の対策**:
   - Windows側ツールからはRead-Onlyドライブとして確実に公開しつつ、もし管理者権限が必須なシステム領域にアクセスしたい場合は、WSL側ディストロの `/etc/wsl.conf` での既定ユーザー調整、またはWSL内での `bindfs` 活用方法についてドキュメント（`docs/testing_and_usage_guide.md`）で案内します。
 
+### 課題⑤：`wsl --unmount` の実行順序による `WSL_E_DISK_ALREADY_MOUNTED` 残留の回避
+- **原因**: Windows の WSL2 サービス（`wslservice.exe`）は `wsl --unmount <target>` の際、内部管理テーブル（`m_attachedDisks`）からディスクを削除する**前**に Linux 側 `mini_init` へ `/mnt/wsl/<name>` の `umount()` を指示する仕様になっています。そのため、先にホスト側から `wsl ... -- umount /mnt/wsl/<name>` を実行してしまうと、後続の `wsl --unmount` が `EINVAL`（既に未マウント）で失敗し、`wslservice.exe` 上にアタッチ状態が残留して再マウント時に `WSL_E_DISK_ALREADY_MOUNTED` が発生するデッドロックに陥ります。
+- **解決設計 (`WslMountService.UnmountAsync`)**:
+  - 原則として Linux 側の `umount` を先行させず、**直接 `wsl.exe --unmount <target>` を実行して WSL2 サービスにマウント解除とディスク切り離しを一括処理**させます（同一物理ディスク上の別パーティションがまだマウントされている場合のみ、個別パーティションの `umount` を行います）。
+  - ドライブレターのみを指定したアンマウント（`unmount --letter L:`）でも、`DriveMapper` で取得した UNC パスのマウント名（`linuxro_d<N>p<M>`）から `\\.\PhysicalDrive<N>` を自動逆引きし、`wsl --unmount` を確実に呼び出します。
+  - 万一過去の不整合等で `WSL_E_DISK_ALREADY_MOUNTED` が発生した場合は、`/proc/mounts` に既存の Read-Only マウントがあれば再利用し、なければ `wsl --unmount` で切り離しを試みてリトライします（それでも解消しない場合のみ `wsl --shutdown` でのリセットを案内）。
+
 ---
 
 ## 4. システムアーキテクチャ・詳細設計

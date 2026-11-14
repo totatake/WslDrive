@@ -101,10 +101,12 @@ public sealed class WslMountServiceTests
         Assert.Equal("L:", sessions[0].MappedDriveLetter);
         Assert.Equal("ext4", sessions[0].FileSystemType);
         Assert.True(sessions[0].IsReadOnly);
+        Assert.Equal(@"\\.\PhysicalDrive1", sessions[0].TargetWslDiskPath);
 
         Assert.Equal("custom share", sessions[1].MountName);
         Assert.Null(sessions[1].MappedDriveLetter);
         Assert.Equal("btrfs", sessions[1].FileSystemType);
+        Assert.Null(sessions[1].TargetWslDiskPath);
     }
 
     [Fact]
@@ -149,6 +151,31 @@ public sealed class WslMountServiceTests
         Assert.Contains(runner.RecordedCalls, c => c.Contains("/mnt/wsl/linuxro_d1p1"));
     }
 
+    [Fact]
+    public async Task MountAsync_DetachesAndRetries_WhenDiskAlreadyMountedStale()
+    {
+        var runner = new StaleMountWslRunner();
+        var service = new WslMountService(
+            runner,
+            (letter, unc) => new DriveMappingResult(true, $"{letter}:", $"Mapped {letter}: -> {unc}", true));
+
+        var req = new MountRequest
+        {
+            DiskIndex = 2,
+            PartitionNumber = 2,
+            DriveLetter = 'L',
+            FileSystemType = "ext4",
+            UseNoLoadJournal = true,
+            DistroName = "Ubuntu"
+        };
+
+        MountOperationResult result = await service.MountAsync(req);
+
+        Assert.True(result.Success);
+        Assert.Equal("ro,noload", result.Session?.MountOptions);
+        Assert.Contains(runner.RecordedCalls, c => c == @"--unmount \\.\PhysicalDrive2");
+    }
+
     private sealed class FakeWslRunner : IWslCommandRunner
     {
         public List<string> RecordedCalls { get; } = [];
@@ -166,6 +193,39 @@ public sealed class WslMountServiceTests
             if (arguments.Contains("--mount") && arguments.Contains("ro,noload"))
             {
                 return Task.FromResult(new WslCommandResult(1, string.Empty, "mount: invalid option noload"));
+            }
+
+            return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
+        }
+    }
+
+    private sealed class StaleMountWslRunner : IWslCommandRunner
+    {
+        private bool _wasUnmounted;
+        public List<string> RecordedCalls { get; } = [];
+
+        public Task<WslCommandResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+        {
+            string joined = string.Join(' ', arguments);
+            RecordedCalls.Add(joined);
+
+            if (arguments.Contains("/proc/mounts"))
+            {
+                return Task.FromResult(new WslCommandResult(0, "none /mnt/wsl tmpfs rw,relatime 0 0\n", string.Empty));
+            }
+
+            if (arguments.Contains("--unmount"))
+            {
+                _wasUnmounted = true;
+                return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
+            }
+
+            if (arguments.Contains("--mount") && !_wasUnmounted)
+            {
+                return Task.FromResult(new WslCommandResult(
+                    -1,
+                    "そのボリュームは WSL2 内で既にマウントされています。\r\nエラー コード: Wsl/Service/DetachDisk/WSL_E_DISK_ALREADY_MOUNTED",
+                    string.Empty));
             }
 
             return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));

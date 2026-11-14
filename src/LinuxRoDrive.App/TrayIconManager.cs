@@ -49,7 +49,7 @@ public sealed class TrayIconManager : IDisposable
         _notifyIcon = new NotifyIcon
         {
             Icon = _trayIcon,
-            Text = "LinuxRoDrive - Read-Only Linux Drive Mounter",
+            Text = "LinuxRoDrive - Linux パーティション Read-Only マウンター",
             ContextMenuStrip = _contextMenu,
             Visible = true
         };
@@ -64,7 +64,7 @@ public sealed class TrayIconManager : IDisposable
 
         _contextMenu.Items.Clear();
 
-        var openWinItem = new ToolStripMenuItem("Open LinuxRoDrive")
+        var openWinItem = new ToolStripMenuItem("LinuxRoDrive ウィンドウを開く")
         {
             Font = new Font(_contextMenu.Font, FontStyle.Bold)
         };
@@ -74,7 +74,7 @@ public sealed class TrayIconManager : IDisposable
 
         if (activeMounts.Count == 0)
         {
-            var emptyItem = new ToolStripMenuItem("No active Linux mounts") { Enabled = false };
+            var emptyItem = new ToolStripMenuItem("現在マウント中のドライブはありません") { Enabled = false };
             _contextMenu.Items.Add(emptyItem);
         }
         else
@@ -83,19 +83,19 @@ public sealed class TrayIconManager : IDisposable
             {
                 string label = string.IsNullOrEmpty(session.MappedDriveLetter)
                     ? $"{session.MountName} ({session.FileSystemType})"
-                    : $"{session.MappedDriveLetter}\\ - {session.MountName} ({session.FileSystemType}, RO)";
+                    : $"{session.MappedDriveLetter}\\ - {session.MountName} ({session.FileSystemType}, 読み取り専用)";
 
                 var mountMenu = new ToolStripMenuItem(label);
 
                 if (!string.IsNullOrEmpty(session.MappedDriveLetter))
                 {
                     string drive = session.MappedDriveLetter;
-                    var openDriveItem = new ToolStripMenuItem($"Open {drive}\\ in Explorer");
+                    var openDriveItem = new ToolStripMenuItem($"{drive}\\ をエクスプローラーで開く");
                     openDriveItem.Click += (_, _) => _onOpenDrive(drive);
                     mountMenu.DropDownItems.Add(openDriveItem);
                 }
 
-                var unmountItem = new ToolStripMenuItem("Unmount");
+                var unmountItem = new ToolStripMenuItem("アンマウント（安全な取り外し）");
                 unmountItem.Click += (_, _) => _onUnmountSession(session);
                 mountMenu.DropDownItems.Add(unmountItem);
 
@@ -107,18 +107,18 @@ public sealed class TrayIconManager : IDisposable
 
         if (activeMounts.Count > 0)
         {
-            var unmountAllExit = new ToolStripMenuItem("Unmount All && Exit");
+            var unmountAllExit = new ToolStripMenuItem("すべてアンマウントして終了");
             unmountAllExit.Click += (_, _) => _onUnmountAllAndExit();
             _contextMenu.Items.Add(unmountAllExit);
         }
 
-        var exitItem = new ToolStripMenuItem("Exit (Keep Mounts)");
+        var exitItem = new ToolStripMenuItem("マウントを維持したままアプリを終了");
         exitItem.Click += (_, _) => _onExitOnly();
         _contextMenu.Items.Add(exitItem);
 
         _notifyIcon.Text = activeMounts.Count > 0
-            ? $"LinuxRoDrive ({activeMounts.Count} active RO mount(s))"
-            : "LinuxRoDrive - Read-Only Linux Drive Mounter";
+            ? $"LinuxRoDrive ({activeMounts.Count} 件マウント中)"
+            : "LinuxRoDrive - Linux パーティション Read-Only マウンター";
     }
 
     public void ShowBalloon(string title, string message, ToolTipIcon icon = ToolTipIcon.Info)
