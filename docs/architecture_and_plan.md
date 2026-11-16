@@ -14,7 +14,8 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 | **対応ファイルシステム** | ext2 / ext3 / ext4 のみ | **◎ ext4 / btrfs / xfs 等カーネル標準FS全般** | ext2 / ext3 / ext4 のみ |
 | **外部ドライバ導入** | Dokan / WinFsp のインストールが必要 | **◎ 不要（Windows 11 + WSL2標準機能のみ）** | Dokan / WinFsp のインストールが必要 |
 | **書き込み防止の安全性** | C#コード側でWrite拒否 | **◎ Linuxカーネルの `ro,noload` マウント** | Cコード側でWrite拒否 |
-| **同物理ディスク別パーティション** | ◎ マウント可能 | △ 不可（別物理ドライブまたは `.vhdx` 専用） | ◎ マウント可能 |
+| **Windows (C:等) と同居する物理ディスクの別パーティション** | ◎ マウント可能 | × 不可（Windows使用中ディスクは `ERROR_SHARING_VIOLATION`。別物理ドライブまたは `.vhdx` 専用） | ◎ マウント可能 |
+| **同一の別物理ディスク（または `.vhdx`）内の複数パーティション同時マウント** | ◎ マウント可能 | **◎ マウント可能**（パーティション単位のセッション管理＋個別/一括アンマウント制御で対応） | ◎ マウント可能 |
 | **開発・保守の容易さ** | ◎ NuGetのみで完結 | **◎ 非常にシンプルかつ堅牢** | △ CライブラリのWindowsビルドが必要 |
 
 **採用理由（案B）**:
@@ -47,9 +48,9 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 
 ---
 
-## 3. Windows 11 / WSL2 特有の4つの技術的課題と解決設計（ADR: 設計判断記録）
+## 3. Windows 11 / WSL2 特有の技術的課題と解決設計（ADR: 設計判断記録）
 
-単に手動で `wsl --mount` と `net use` / `subst` を実行するだけでは遭遇する4つの落とし穴に対し、本ツールではOS内部構造に基づく以下の解決策を組み込んでいます。
+単に手動で `wsl --mount` と `net use` / `subst` を実行するだけでは遭遇する Windows / WSL2 固有の落とし穴に対し、本ツールでは OS 内部構造に基づく以下の解決策を組み込んでいます。
 
 ### 課題①：Plan 9 Network Provider (`p9np.dll`) がサブディレクトリのドライブ割当を拒否する問題（エラー 64）
 - **現象と根本原因**:
@@ -90,6 +91,20 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
   - 原則として Linux 側の `umount` を先行させず、**直接 `wsl.exe --unmount <target>` を実行して WSL2 サービスにマウント解除とディスク切り離しを一括処理**させます（同一物理ディスク上の別パーティションがまだマウントされている場合のみ、個別パーティションの `umount` を行います）。
   - ドライブレターのみを指定したアンマウント（`unmount --letter L:`）でも、`DriveMapper` で取得した UNC パスのマウント名（`linuxro_d<N>p<M>`）から `\\.\PhysicalDrive<N>` を自動逆引きし、`wsl --unmount` を確実に呼び出します。
   - 万一過去の不整合等で `WSL_E_DISK_ALREADY_MOUNTED` が発生した場合は、`/proc/mounts` に既存の Read-Only マウントがあれば再利用し、なければ `wsl --unmount` で切り離しを試みてリトライします（それでも解消しない場合のみ `wsl --shutdown` でのリセットを案内）。
+
+### 課題⑥：同一物理ディスク（または VHDX）内の複数パーティション同時マウントと個別・一括アンマウント制御
+- **現象と WSL2 内部仕様**:
+  - `wslservice.exe`（`WslCoreVm::MountDisk`）はアタッチ済みディスクを `m_attachedDisks[disk]` に記録し、その配下の `Mounts[partitionIndex]` マップでパーティション単位のマウント状態を管理しています（`wsl.exe` 側は既にディスクがアタッチ済みであることを示す `WSL_E_DISK_ALREADY_ATTACHED` / `WSL_E_USER_VHD_ALREADY_ATTACHED` を無視してマウント処理を続行します）。そのため、同じ別物理ディスク（または `.vhdx`）上の Partition 1 と Partition 2 を順次 `wsl --mount --partition ...` で同時マウントすること自体は標準でサポートされています。
+  - 一方で、そのまま運用すると以下の3つのエッジケースが発生します：
+    1. **アンマウント時の巻き込み**: `wsl --unmount \\.\PhysicalDriveN`（パーティション指定なし）を実行すると、そのディスク全体がデタッチされ、同じディスク上の他パーティションのマウントもすべて強制解除されてしまいます。
+    2. **個別解除後の再マウント競合**: Partition 1 と Partition 2 をマウントした状態で Partition 1 だけを WSL 側の `umount` で個別解除したあと、Partition 2 がマウントされたまま Partition 1 を再度 `wsl --mount` すると、`m_attachedDisks[disk].Mounts[1]` がまだ `wslservice.exe` 上に残っているため `WSL_E_DISK_ALREADY_MOUNTED` が返されます。このときに `wsl --unmount` でディスクを切り離すと、利用中の Partition 2 まで道連れになってしまいます。
+    3. **最後のパーティション解除時の `EINVAL` 残留**: 先に Partition 1 を WSL 内で個別 `umount` し、最後に Partition 2 を `wsl --unmount` で切り離そうとすると、`WslCoreVm::DetachDisk` が `Mounts` に記録された**全パーティション**（Partition 1 を含む）に対して `mini_init` へ `umount("/mnt/wsl/<name>")` を要求するため、既に外れている Partition 1 で `EINVAL` が返り、ディスク全体のデタッチに失敗します。
+- **解決設計 (`WslMountService` / `MountSession` / `MainWindow`)**:
+  - **ステートレスなセッション管理**: プロセス内メモリ（静的辞書）のみに頼ると CLI の複数回呼び出しや GUI 再起動で状態が欠落するため、`GetActiveMountsAsync` が毎回 `/proc/mounts` と `DriveMapper.GetMappedNetworkDrives()` を突き合わせて `DiskIndex`・`PartitionNumber`・`SourceDeviceInWsl`・`TargetWslDiskPath` を復元します。
+  - **再マウント時の兄弟デバイス利用 (`TryMountSiblingPartitionInWslAsync`)**: `wsl --mount` が `WSL_E_DISK_ALREADY_MOUNTED` を返した場合でも、`/proc/mounts` 上に同じディスクの兄弟パーティション（例: `/dev/sdc2`）がアクティブに残っていれば、`wsl --unmount` によるディスク切り離しを行わず、兄弟のベースブロックデバイス名（`/dev/sdc`）＋対象パーティション番号から導出したデバイス（`/dev/sdc1`、NVMe 等は `nvme0n1p1`）を直接 `/mnt/wsl/<mountName>` へ `ro,noload`（必要に応じ `ro`）でマウントします。
+  - **個別・一括アンマウントの自動分岐 (`UnmountAsync`)**: `--letter` 指定またはマウント名指定のアンマウント時、同一物理ディスクまたは同一ベースブロックデバイス（`/dev/sdc` 等）上に他パーティションが残存している場合は、ドライブレター解除＋当該マウントポイントのみの `umount` に留め、物理ディスクはアタッチしたまま維持します。最後の1件を外す場合、または `unmount --disk <N>` / `forceWholeDisk: true` の場合は、紐づく全ドライブレターを解除してから `wsl --unmount` でディスクごと切り離します。
+  - **最終デタッチ前のマウントポイント補完 (`EnsureStaleMountPointsBoundForDetachAsync`)**: ディスク全体の `wsl --unmount` が失敗した際（または未マウントの stale 状態からデタッチを試みる際）、過去に個別 `umount` 済みで空ディレクトリとして残っている `/mnt/wsl/linuxro_*` に対し、無害な自己バインドマウント（`mount --bind "$d" "$d"`）を補ってから `wsl --unmount` を再実行することで、`mini_init` の `umount()` ＋ `rmdir()` を正常完了させてディスクを確実にデタッチします。
+  - **GUI 確認ダイアログ (`MainWindow.UnmountSessionAsync`)**: 同一ディスクに他のマウント中パーティションがある状態で単一行をアンマウントしようとした場合、「選択したパーティションのみ個別アンマウント (`[はい]`)」か「同一ディスクの全パーティションを一括アンマウント (`[いいえ]`)」かを確認し、意図しない兄弟ドライブの切断を防ぎます。
 
 ---
 

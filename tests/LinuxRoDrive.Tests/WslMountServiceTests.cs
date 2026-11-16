@@ -102,11 +102,24 @@ public sealed class WslMountServiceTests
         Assert.Equal("ext4", sessions[0].FileSystemType);
         Assert.True(sessions[0].IsReadOnly);
         Assert.Equal(@"\\.\PhysicalDrive1", sessions[0].TargetWslDiskPath);
+        Assert.Equal(1, sessions[0].DiskIndex);
+        Assert.Equal(2, sessions[0].PartitionNumber);
 
         Assert.Equal("custom share", sessions[1].MountName);
         Assert.Null(sessions[1].MappedDriveLetter);
         Assert.Equal("btrfs", sessions[1].FileSystemType);
         Assert.Null(sessions[1].TargetWslDiskPath);
+        Assert.Null(sessions[1].DiskIndex);
+        Assert.Null(sessions[1].PartitionNumber);
+    }
+
+    [Fact]
+    public void GetPartitionDeviceFromBase_FormatsSataAndNvmeDeviceNames()
+    {
+        Assert.Equal("/dev/sdc1", WslMountService.GetPartitionDeviceFromBase("/dev/sdc", 1));
+        Assert.Equal("/dev/nvme0n1p1", WslMountService.GetPartitionDeviceFromBase("/dev/nvme0n1", 1));
+        Assert.Equal("/dev/mmcblk0p2", WslMountService.GetPartitionDeviceFromBase("/dev/mmcblk0", 2));
+        Assert.Equal("/dev/sdc", WslMountService.GetPartitionDeviceFromBase("/dev/sdc", 0));
     }
 
     [Fact]
@@ -174,6 +187,81 @@ public sealed class WslMountServiceTests
         Assert.True(result.Success);
         Assert.Equal("ro,noload", result.Session?.MountOptions);
         Assert.Contains(runner.RecordedCalls, c => c == @"--unmount \\.\PhysicalDrive2");
+    }
+
+    [Fact]
+    public async Task UnmountAsync_KeepsDiskAttachedAndRunsWslUmount_WhenSiblingPartitionRemains()
+    {
+        var runner = new MultiPartitionWslRunner(
+            "/dev/sdc1 /mnt/wsl/linuxro_d2p1 ext4 ro,relatime,noload 0 0\n" +
+            "/dev/sdc2 /mnt/wsl/linuxro_d2p2 ext4 ro,relatime,noload 0 0\n");
+        var service = new WslMountService(runner);
+
+        UnmountOperationResult result = await service.UnmountAsync(
+            driveLetter: null,
+            diskIndex: 2,
+            vhdPath: null,
+            distroName: "Ubuntu",
+            mountName: "linuxro_d2p1");
+
+        Assert.True(result.Success);
+        Assert.Contains(runner.RecordedCalls, c => c == "-d Ubuntu -u root -- umount /mnt/wsl/linuxro_d2p1");
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
+    }
+
+    [Fact]
+    public async Task MountAsync_MountsSiblingPartitionDirectly_WhenReMountingPartitionWithActiveSibling()
+    {
+        var runner = new MultiPartitionWslRunner(
+            "/dev/sdc2 /mnt/wsl/linuxro_d2p2 ext4 ro,relatime,noload 0 0\n",
+            failMountWithAlreadyMounted: true);
+        var service = new WslMountService(
+            runner,
+            (letter, unc) => new DriveMappingResult(true, $"{letter}:", $"Mapped {letter}: -> {unc}", true));
+
+        var req = new MountRequest
+        {
+            DiskIndex = 2,
+            PartitionNumber = 1,
+            DriveLetter = 'L',
+            FileSystemType = "ext4",
+            UseNoLoadJournal = true,
+            DistroName = "Ubuntu"
+        };
+
+        MountOperationResult result = await service.MountAsync(req);
+
+        Assert.True(result.Success);
+        Assert.Equal("ro,noload", result.Session?.MountOptions);
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
+        Assert.Contains(runner.RecordedCalls, c =>
+            c.Contains("'/dev/sdc1'") && c.Contains("'/mnt/wsl/linuxro_d2p1'"));
+    }
+
+    private sealed class MultiPartitionWslRunner(string procMountsOutput, bool failMountWithAlreadyMounted = false) : IWslCommandRunner
+    {
+        public List<string> RecordedCalls { get; } = [];
+
+        public Task<WslCommandResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+        {
+            string joined = string.Join(' ', arguments);
+            RecordedCalls.Add(joined);
+
+            if (arguments.Contains("/proc/mounts"))
+            {
+                return Task.FromResult(new WslCommandResult(0, procMountsOutput, string.Empty));
+            }
+
+            if (failMountWithAlreadyMounted && arguments.Contains("--mount"))
+            {
+                return Task.FromResult(new WslCommandResult(
+                    -1,
+                    "エラー コード: Wsl/Service/DetachDisk/WSL_E_DISK_ALREADY_MOUNTED",
+                    string.Empty));
+            }
+
+            return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
+        }
     }
 
     private sealed class FakeWslRunner : IWslCommandRunner

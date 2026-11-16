@@ -566,7 +566,7 @@ public partial class MainWindow : Window
 
         foreach (MountSession session in _activeMounts.ToList())
         {
-            await UnmountSessionAsync(session);
+            await UnmountSessionAsync(session, promptIfSiblings: false);
         }
     }
 
@@ -592,8 +592,48 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task UnmountSessionAsync(MountSession session)
+    private async Task UnmountSessionAsync(MountSession session, bool promptIfSiblings = true)
     {
+        if (promptIfSiblings)
+        {
+            var siblings = _activeMounts
+                .Where(m => !m.MountName.Equals(session.MountName, StringComparison.OrdinalIgnoreCase) &&
+                            ((session.DiskIndex.HasValue && m.DiskIndex == session.DiskIndex) ||
+                             (!string.IsNullOrWhiteSpace(session.TargetWslDiskPath) &&
+                              string.Equals(m.TargetWslDiskPath, session.TargetWslDiskPath, StringComparison.OrdinalIgnoreCase))))
+                .ToList();
+
+            if (siblings.Count > 0)
+            {
+                string sessionDrive = !string.IsNullOrWhiteSpace(session.MappedDriveLetter)
+                    ? session.MappedDriveLetter
+                    : session.MountName;
+                string siblingList = string.Join(", ", siblings.Select(s =>
+                    !string.IsNullOrWhiteSpace(s.MappedDriveLetter) ? $"{s.MappedDriveLetter} ({s.MountName})" : s.MountName));
+
+                var choice = System.Windows.MessageBox.Show(
+                    this,
+                    $"同じディスク上に他にもマウント中のパーティションがあります ({siblingList})。\n\n[はい]: 選択した {sessionDrive} ({session.MountName}) のみ個別にアンマウントする\n[いいえ]: このディスクの全パーティションを一括アンマウントして切り離す\n[キャンセル]: キャンセル",
+                    "複数パーティションのアンマウント確認",
+                    MessageBoxButton.YesNoCancel,
+                    MessageBoxImage.Question);
+
+                if (choice == MessageBoxResult.Cancel)
+                {
+                    return;
+                }
+
+                if (choice == MessageBoxResult.No)
+                {
+                    foreach (MountSession s in siblings.Append(session).ToList())
+                    {
+                        await UnmountSessionAsync(s, promptIfSiblings: false);
+                    }
+                    return;
+                }
+            }
+        }
+
         SetBusy(true);
         try
         {
@@ -730,7 +770,7 @@ public partial class MainWindow : Window
 
         foreach (MountSession session in _activeMounts.ToList())
         {
-            await UnmountSessionAsync(session);
+            await UnmountSessionAsync(session, promptIfSiblings: false);
         }
 
         ExitApplication();

@@ -16,7 +16,7 @@ public sealed partial class WslMountService
     private readonly IWslCommandRunner _runner;
     private readonly Func<char, string, DriveMappingResult> _mapDrive;
 
-    [GeneratedRegex(@"^linuxro_d(?<disk>\d+)(?:p\d+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^linuxro_d(?<disk>\d+)(?:p(?<part>\d+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AutoMountNameDiskRegex();
 
     [GeneratedRegex(@"[\\/]+mnt[\\/]+wsl[\\/]+(?<name>[^\\/]+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -180,7 +180,10 @@ public sealed partial class WslMountService
 
         // If WSL2 reports that the disk/partition/mount-name is already mounted or attached:
         // 1) Check if /mnt/wsl/<mountName> is already actively mounted read-only in /proc/mounts; if so, reuse it.
-        // 2) Otherwise, detach the stale disk state via `wsl --unmount <target>` and retry `wsl --mount` once.
+        // 2) Check if a sibling partition on the same disk is actively mounted; if so, do NOT detach the disk
+        //    and instead mount the requested partition directly inside WSL from the sibling's base block device.
+        // 3) Otherwise, ensure any stale unmounted /mnt/wsl/linuxro_* directories are self-bound so mini_init's
+        //    umount() succeeds, detach via `wsl --unmount <target>`, and retry `wsl --mount` once.
         if (mountResult.ExitCode != 0 && ContainsAlreadyMountedOrAttached(mountResult))
         {
             log?.Invoke($"wsl --mount reported existing attachment/mount ({CombineOutput(mountResult)}). Checking /proc/mounts...");
@@ -197,15 +200,41 @@ public sealed partial class WslMountService
             }
             else
             {
-                log?.Invoke($"Detaching stale WSL2 disk state: wsl.exe --unmount {targetDiskArg}");
-                var unmountRes = await _runner.RunAsync(["--unmount", targetDiskArg], cancellationToken).ConfigureAwait(false);
-                if (unmountRes.ExitCode != 0)
-                {
-                    log?.Invoke($"wsl --unmount returned {unmountRes.ExitCode}: {CombineOutput(unmountRes)}");
-                }
+                var activeSibling = existingMounts.FirstOrDefault(m =>
+                    !string.IsNullOrEmpty(m.SourceDeviceInWsl) &&
+                    !string.IsNullOrEmpty(m.TargetWslDiskPath) &&
+                    m.TargetWslDiskPath.Equals(targetDiskArg, StringComparison.OrdinalIgnoreCase));
 
-                log?.Invoke($"Retrying: wsl.exe {string.Join(' ', mountArgs)}");
-                mountResult = await _runner.RunAsync(mountArgs, cancellationToken).ConfigureAwait(false);
+                if (activeSibling is not null)
+                {
+                    var siblingMount = await TryMountSiblingPartitionInWslAsync(
+                        request,
+                        distro,
+                        mountName,
+                        activeSibling.SourceDeviceInWsl,
+                        usedOptions,
+                        log,
+                        cancellationToken).ConfigureAwait(false);
+
+                    if (siblingMount.Success)
+                    {
+                        usedOptions = siblingMount.UsedOptions;
+                        mountResult = new WslCommandResult(0, string.Empty, string.Empty);
+                    }
+                }
+                else
+                {
+                    await EnsureStaleMountPointsBoundForDetachAsync(distro, cancellationToken).ConfigureAwait(false);
+                    log?.Invoke($"Detaching stale WSL2 disk state: wsl.exe --unmount {targetDiskArg}");
+                    var unmountRes = await _runner.RunAsync(["--unmount", targetDiskArg], cancellationToken).ConfigureAwait(false);
+                    if (unmountRes.ExitCode != 0)
+                    {
+                        log?.Invoke($"wsl --unmount returned {unmountRes.ExitCode}: {CombineOutput(unmountRes)}");
+                    }
+
+                    log?.Invoke($"Retrying: wsl.exe {string.Join(' ', mountArgs)}");
+                    mountResult = await _runner.RunAsync(mountArgs, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
 
@@ -279,11 +308,69 @@ public sealed partial class WslMountService
             FileSystemType = request.FileSystemType ?? "auto",
             MountOptions = usedOptions,
             IsReadOnly = true,
-            TargetWslDiskPath = targetDiskArg
+            TargetWslDiskPath = targetDiskArg,
+            DiskIndex = request.DiskIndex,
+            PartitionNumber = request.PartitionNumber
         };
 
         log?.Invoke(mapResult.Message);
         return new MountOperationResult(true, session, $"Mounted {targetDiskArg} on {driveLetter}: ({usedOptions}).");
+    }
+
+    private async Task<(bool Success, string UsedOptions)> TryMountSiblingPartitionInWslAsync(
+        MountRequest request,
+        string distro,
+        string mountName,
+        string siblingSourceDevice,
+        string preferredOptions,
+        Action<string>? log,
+        CancellationToken cancellationToken)
+    {
+        string baseDev = GetBaseBlockDevice(siblingSourceDevice);
+        string partDev = request.PartitionNumber is > 0
+            ? GetPartitionDeviceFromBase(baseDev, request.PartitionNumber.Value)
+            : baseDev;
+        string fsTypeArg = !string.IsNullOrWhiteSpace(request.FileSystemType)
+            ? $"-t {request.FileSystemType} "
+            : string.Empty;
+        string wslMountPoint = $"/mnt/wsl/{mountName}";
+
+        log?.Invoke($"Disk already has active sibling mount ({siblingSourceDevice}); mounting {partDev} at {wslMountPoint} ({preferredOptions})...");
+        string mountCmd = $"mkdir -p '{wslMountPoint}' && (mountpoint -q '{wslMountPoint}' || mount {fsTypeArg}-o {preferredOptions} '{partDev}' '{wslMountPoint}')";
+        var mountRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", mountCmd], cancellationToken).ConfigureAwait(false);
+        if (mountRes.ExitCode == 0)
+        {
+            return (true, preferredOptions);
+        }
+
+        if (preferredOptions == "ro,noload")
+        {
+            log?.Invoke($"Sibling mount with `ro,noload` failed ({CombineOutput(mountRes)}); retrying with `ro`...");
+            string fallbackCmd = $"mkdir -p '{wslMountPoint}' && (mountpoint -q '{wslMountPoint}' || mount {fsTypeArg}-o ro '{partDev}' '{wslMountPoint}')";
+            var fallbackRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", fallbackCmd], cancellationToken).ConfigureAwait(false);
+            if (fallbackRes.ExitCode == 0)
+            {
+                return (true, "ro");
+            }
+        }
+
+        log?.Invoke($"Sibling partition mount of {partDev} failed: {CombineOutput(mountRes)}");
+        return (false, preferredOptions);
+    }
+
+    private async Task EnsureStaleMountPointsBoundForDetachAsync(string distro, CancellationToken cancellationToken)
+    {
+        // When a partition under /mnt/wsl/linuxro_* was previously unmounted via `umount` inside WSL while another
+        // partition on the same disk remained active, wslservice.exe still tracks it in m_attachedDisks[disk].Mounts.
+        // Calling `wsl --unmount` later asks mini_init to umount all tracked paths; binding any unmounted directory
+        // onto itself lets mini_init's umount() + rmdir() succeed cleanly.
+        const string bindScript =
+            "for d in /mnt/wsl/linuxro_*; do " +
+            "  [ -d \"$d\" ] || continue; " +
+            "  mountpoint -q \"$d\" || mount --bind \"$d\" \"$d\" 2>/dev/null || true; " +
+            "done";
+
+        _ = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", bindScript], cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<UnmountOperationResult> UnmountAsync(
@@ -293,7 +380,8 @@ public sealed partial class WslMountService
         string? distroName = null,
         Action<string>? log = null,
         CancellationToken cancellationToken = default,
-        string? mountName = null)
+        string? mountName = null,
+        bool forceWholeDisk = false)
     {
         string? inferredDiskTarget = null;
         string? resolvedMountName = !string.IsNullOrWhiteSpace(mountName) ? mountName.Trim() : null;
@@ -336,9 +424,31 @@ public sealed partial class WslMountService
             ? distroName.Trim()
             : await GetDefaultDistroAsync(cancellationToken).ConfigureAwait(false);
 
+        bool wholeDiskRequested = forceWholeDisk ||
+                                  (!driveLetter.HasValue && string.IsNullOrWhiteSpace(resolvedMountName) && !string.IsNullOrWhiteSpace(unmountTarget));
         bool otherPartitionsRemainOnSameBaseDevice = false;
         MountSession? targetSession = null;
-        if (!string.IsNullOrWhiteSpace(resolvedMountName) && !string.IsNullOrWhiteSpace(distro))
+
+        if (wholeDiskRequested && !string.IsNullOrWhiteSpace(unmountTarget))
+        {
+            if (!string.IsNullOrWhiteSpace(distro))
+            {
+                var active = await GetActiveMountsAsync(distro, cancellationToken).ConfigureAwait(false);
+                foreach (var session in active)
+                {
+                    if (!string.IsNullOrEmpty(session.TargetWslDiskPath) &&
+                        session.TargetWslDiskPath.Equals(unmountTarget, StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(session.MappedDriveLetter))
+                    {
+                        char mappedLetter = char.ToUpperInvariant(session.MappedDriveLetter[0]);
+                        log?.Invoke($"Unmapping drive {mappedLetter}:...");
+                        var unmapRes = DriveMapper.UnmapDriveLetter(mappedLetter);
+                        log?.Invoke(unmapRes.Message);
+                    }
+                }
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(resolvedMountName) && !string.IsNullOrWhiteSpace(distro))
         {
             var active = await GetActiveMountsAsync(distro, cancellationToken).ConfigureAwait(false);
             targetSession = active.FirstOrDefault(m =>
@@ -347,24 +457,28 @@ public sealed partial class WslMountService
             if (targetSession is not null)
             {
                 unmountTarget ??= targetSession.TargetWslDiskPath;
-                string baseDev = GetBaseBlockDevice(targetSession.SourceDeviceInWsl);
-                otherPartitionsRemainOnSameBaseDevice = !string.IsNullOrEmpty(baseDev) &&
-                    active.Any(m =>
-                        !m.MountName.Equals(resolvedMountName, StringComparison.OrdinalIgnoreCase) &&
-                        GetBaseBlockDevice(m.SourceDeviceInWsl).Equals(baseDev, StringComparison.OrdinalIgnoreCase));
             }
+
+            string baseDev = targetSession is not null ? GetBaseBlockDevice(targetSession.SourceDeviceInWsl) : string.Empty;
+            otherPartitionsRemainOnSameBaseDevice = active.Any(m =>
+                !m.MountName.Equals(resolvedMountName, StringComparison.OrdinalIgnoreCase) &&
+                ((!string.IsNullOrEmpty(baseDev) && GetBaseBlockDevice(m.SourceDeviceInWsl).Equals(baseDev, StringComparison.OrdinalIgnoreCase)) ||
+                 (!string.IsNullOrEmpty(unmountTarget) && string.Equals(m.TargetWslDiskPath, unmountTarget, StringComparison.OrdinalIgnoreCase))));
         }
 
         if (!string.IsNullOrWhiteSpace(unmountTarget))
         {
-            if (otherPartitionsRemainOnSameBaseDevice && targetSession is not null && !string.IsNullOrWhiteSpace(distro))
+            if (otherPartitionsRemainOnSameBaseDevice && !string.IsNullOrWhiteSpace(distro))
             {
                 // Another partition on the same disk is still mounted, so only umount this partition inside WSL
                 // without detaching the entire physical disk from the WSL2 VM.
-                log?.Invoke($"Running: wsl.exe -d {distro} -u root -- umount {targetSession.WslMountPoint}");
-                _ = await _runner.RunAsync(
-                    ["-d", distro, "-u", "root", "--", "umount", targetSession.WslMountPoint],
-                    cancellationToken).ConfigureAwait(false);
+                if (targetSession is not null)
+                {
+                    log?.Invoke($"Running: wsl.exe -d {distro} -u root -- umount {targetSession.WslMountPoint}");
+                    _ = await _runner.RunAsync(
+                        ["-d", distro, "-u", "root", "--", "umount", targetSession.WslMountPoint],
+                        cancellationToken).ConfigureAwait(false);
+                }
 
                 return new UnmountOperationResult(
                     true,
@@ -376,6 +490,12 @@ public sealed partial class WslMountService
             // mountpoint to still be mounted when `mini_init` detaches the disk.
             log?.Invoke($"Running: wsl.exe --unmount {unmountTarget}");
             var wslUnmount = await _runner.RunAsync(["--unmount", unmountTarget], cancellationToken).ConfigureAwait(false);
+            if (wslUnmount.ExitCode != 0 && !string.IsNullOrWhiteSpace(distro))
+            {
+                await EnsureStaleMountPointsBoundForDetachAsync(distro, cancellationToken).ConfigureAwait(false);
+                wslUnmount = await _runner.RunAsync(["--unmount", unmountTarget], cancellationToken).ConfigureAwait(false);
+            }
+
             if (wslUnmount.ExitCode != 0)
             {
                 string err = CombineOutput(wslUnmount);
@@ -477,10 +597,17 @@ public sealed partial class WslMountService
             }
 
             string? inferredTargetDisk = null;
+            int? parsedDiskIndex = null;
+            int? parsedPartitionNumber = null;
             var diskMatch = AutoMountNameDiskRegex().Match(mountName);
             if (diskMatch.Success && int.TryParse(diskMatch.Groups["disk"].Value, out int parsedDisk))
             {
+                parsedDiskIndex = parsedDisk;
                 inferredTargetDisk = $@"\\.\PhysicalDrive{parsedDisk}";
+                if (diskMatch.Groups["part"].Success && int.TryParse(diskMatch.Groups["part"].Value, out int parsedPart))
+                {
+                    parsedPartitionNumber = parsedPart;
+                }
             }
 
             bool isRo = options.Split(',').Any(o => o.Equals("ro", StringComparison.OrdinalIgnoreCase));
@@ -494,11 +621,24 @@ public sealed partial class WslMountService
                 FileSystemType = fsType,
                 MountOptions = options,
                 IsReadOnly = isRo,
-                TargetWslDiskPath = inferredTargetDisk
+                TargetWslDiskPath = inferredTargetDisk,
+                DiskIndex = parsedDiskIndex,
+                PartitionNumber = parsedPartitionNumber
             });
         }
 
         return sessions;
+    }
+
+    public static string GetPartitionDeviceFromBase(string baseDevice, int partitionNumber)
+    {
+        if (string.IsNullOrWhiteSpace(baseDevice) || partitionNumber <= 0)
+        {
+            return baseDevice;
+        }
+        return char.IsDigit(baseDevice[^1])
+            ? $"{baseDevice}p{partitionNumber}"
+            : $"{baseDevice}{partitionNumber}";
     }
 
     private static string GetBaseBlockDevice(string devicePath)

@@ -14,4 +14,6 @@ public sealed class MountSession
     public string MountOptions { get; init; } = string.Empty;
     public bool IsReadOnly { get; init; }
     public string? TargetWslDiskPath { get; init; }
+    public int? DiskIndex { get; init; }
+    public int? PartitionNumber { get; init; }
 }
