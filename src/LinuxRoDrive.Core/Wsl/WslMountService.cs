@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using LinuxRoDrive.Core.Disk;
 using LinuxRoDrive.Core.Interop;
 using LinuxRoDrive.Core.Models;
 
@@ -8,13 +10,16 @@ public sealed record MountOperationResult(bool Success, MountSession? Session, s
 public sealed record UnmountOperationResult(bool Success, string Message);
 
 /// <summary>
-/// Orchestrates WSL2 `wsl --mount` / `wsl --unmount`, active mount inspection via `/proc/mounts`,
-/// and Windows drive letter mapping via <see cref="DriveMapper"/>.
+/// Orchestrates WSL2 `wsl --mount` / `wsl --unmount`, Read-Only NBD bridge mounts for Windows-shared disks,
+/// active mount inspection via `/proc/mounts`, and Windows drive letter mapping via <see cref="DriveMapper"/>.
 /// </summary>
 public sealed partial class WslMountService
 {
     private readonly IWslCommandRunner _runner;
     private readonly Func<char, string, DriveMappingResult> _mapDrive;
+    private readonly INbdBridgeProvider _nbdBridgeProvider;
+    private readonly ConcurrentDictionary<string, IAsyncDisposable> _activeNbdSessions =
+        new(StringComparer.OrdinalIgnoreCase);
 
     [GeneratedRegex(@"^linuxro_d(?<disk>\d+)(?:p(?<part>\d+))?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AutoMountNameDiskRegex();
@@ -26,10 +31,14 @@ public sealed partial class WslMountService
     {
     }
 
-    public WslMountService(IWslCommandRunner runner, Func<char, string, DriveMappingResult>? mapDrive = null)
+    public WslMountService(
+        IWslCommandRunner runner,
+        Func<char, string, DriveMappingResult>? mapDrive = null,
+        INbdBridgeProvider? nbdBridgeProvider = null)
     {
         _runner = runner ?? throw new ArgumentNullException(nameof(runner));
         _mapDrive = mapDrive ?? DriveMapper.MapDriveLetter;
+        _nbdBridgeProvider = nbdBridgeProvider ?? new InProcessNbdBridgeProvider();
     }
 
     public async Task<string?> GetDefaultDistroAsync(CancellationToken cancellationToken = default)
@@ -172,6 +181,13 @@ public sealed partial class WslMountService
 
         string mountName = request.ResolveMountName();
         string targetDiskArg = request.GetTargetWslDiskArgument();
+
+        if (request.DiskIndex.HasValue && request.ForceNbdBridge)
+        {
+            return await MountViaNbdBridgeAsync(request, distro, mountName, targetDiskArg, driveLetter, log, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         List<string> mountArgs = BuildMountArguments(request, forceSimpleRo: false);
         string usedOptions = mountArgs[^1];
 
@@ -259,6 +275,15 @@ public sealed partial class WslMountService
             mountResult = await _runner.RunAsync(mountArgs, cancellationToken).ConfigureAwait(false);
         }
 
+        if (mountResult.ExitCode != 0 &&
+            request.DiskIndex.HasValue &&
+            ContainsSharingViolation(mountResult))
+        {
+            log?.Invoke("Physical disk is shared with Windows (ERROR_SHARING_VIOLATION); switching to Read-Only WSL2 NBD bridge...");
+            return await MountViaNbdBridgeAsync(request, distro, mountName, targetDiskArg, driveLetter, log, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         if (mountResult.ExitCode != 0)
         {
             string details = CombineOutput(mountResult);
@@ -270,23 +295,9 @@ public sealed partial class WslMountService
             return new MountOperationResult(false, null, $"wsl --mount failed (exit {mountResult.ExitCode}): {details}{hint}");
         }
 
-        // Ensure the distro VM/9P server is awake and verify the mount directory exists.
         string wslMountPoint = $"/mnt/wsl/{mountName}";
-        var checkDir = await _runner.RunAsync(["-d", distro, "--", "test", "-d", wslMountPoint], cancellationToken).ConfigureAwait(false);
-        if (checkDir.ExitCode != 0)
-        {
-            log?.Invoke($"Warning: /mnt/wsl/{mountName} check returned exit code {checkDir.ExitCode}.");
-        }
-
-        string uncPath = $@"\\wsl.localhost\{distro}\mnt\wsl\{mountName}";
-        if (OperatingSystem.IsWindows() && !Directory.Exists(uncPath))
-        {
-            string legacyUnc = $@"\\wsl$\{distro}\mnt\wsl\{mountName}";
-            if (Directory.Exists(legacyUnc))
-            {
-                uncPath = legacyUnc;
-            }
-        }
+        string uncPath = await ResolveAccessibleUncPathAsync(distro, mountName, wslMountPoint, log, cancellationToken)
+            .ConfigureAwait(false);
 
         log?.Invoke($"Mapping {driveLetter}: -> {uncPath}");
         DriveMappingResult mapResult = _mapDrive(driveLetter, uncPath);
@@ -315,6 +326,198 @@ public sealed partial class WslMountService
 
         log?.Invoke(mapResult.Message);
         return new MountOperationResult(true, session, $"Mounted {targetDiskArg} on {driveLetter}: ({usedOptions}).");
+    }
+
+    private async Task<MountOperationResult> MountViaNbdBridgeAsync(
+        MountRequest request,
+        string distro,
+        string mountName,
+        string targetDiskArg,
+        char driveLetter,
+        Action<string>? log,
+        CancellationToken cancellationToken)
+    {
+        var existingMounts = await GetActiveMountsAsync(distro, cancellationToken).ConfigureAwait(false);
+        var existingSameMount = existingMounts.FirstOrDefault(m =>
+            m.MountName.Equals(mountName, StringComparison.OrdinalIgnoreCase));
+
+        if (existingSameMount is not null && existingSameMount.IsReadOnly)
+        {
+            log?.Invoke($"Found existing read-only mount at {existingSameMount.WslMountPoint}; reusing and mapping drive letter {driveLetter}:...");
+            string existingUnc = await ResolveAccessibleUncPathAsync(distro, mountName, existingSameMount.WslMountPoint, log, cancellationToken)
+                .ConfigureAwait(false);
+            DriveMappingResult existingMap = _mapDrive(driveLetter, existingUnc);
+            if (!existingMap.Success)
+            {
+                return new MountOperationResult(false, null, existingMap.Message);
+            }
+
+            var reusedSession = new MountSession
+            {
+                MountName = mountName,
+                SourceDeviceInWsl = existingSameMount.SourceDeviceInWsl,
+                WslMountPoint = existingSameMount.WslMountPoint,
+                UncPath = existingUnc,
+                MappedDriveLetter = $"{driveLetter}:",
+                FileSystemType = request.FileSystemType ?? existingSameMount.FileSystemType,
+                MountOptions = existingSameMount.MountOptions,
+                IsReadOnly = true,
+                TargetWslDiskPath = targetDiskArg,
+                DiskIndex = request.DiskIndex,
+                PartitionNumber = request.PartitionNumber
+            };
+            return new MountOperationResult(true, reusedSession, $"Mapped {existingUnc} on {driveLetter}: ({existingSameMount.MountOptions}).");
+        }
+
+        long offsetBytes = request.PartitionOffsetBytes ?? -1;
+        long sizeBytes = request.PartitionSizeBytes ?? -1;
+        int sectorSize = request.SectorSize > 0 ? request.SectorSize : 512;
+        string? fsType = request.FileSystemType;
+
+        if (offsetBytes < 0 || sizeBytes <= 0)
+        {
+            PhysicalDiskEntry? disk = new DiskScanner().ScanPhysicalDisks()
+                .FirstOrDefault(d => d.DiskIndex == request.DiskIndex!.Value);
+            if (disk is null)
+            {
+                return new MountOperationResult(false, null, $"Could not find physical disk {request.DiskIndex}.");
+            }
+
+            PartitionEntry? part = request.PartitionNumber is > 0
+                ? disk.Partitions.FirstOrDefault(p => p.PartitionNumber == request.PartitionNumber.Value)
+                : disk.Partitions.FirstOrDefault(p => p.IsLinuxFileSystem);
+
+            if (part is null)
+            {
+                return new MountOperationResult(
+                    false,
+                    null,
+                    $"Could not resolve partition {request.PartitionNumber} geometry on Disk {disk.DiskIndex} for NBD bridge.");
+            }
+
+            offsetBytes = part.OffsetBytes;
+            sizeBytes = part.SizeBytes;
+            sectorSize = disk.SectorSize;
+            fsType ??= part.FileSystemType.ToWslTypeName();
+        }
+
+        log?.Invoke($"Attaching partition {request.PartitionNumber} of Disk {request.DiskIndex} via Read-Only WSL2 NBD bridge...");
+        NbdBridgeAttachment attach = await _nbdBridgeProvider.AttachPartitionAsync(
+            request.DiskIndex!.Value,
+            offsetBytes,
+            sizeBytes,
+            sectorSize,
+            distro,
+            log,
+            cancellationToken).ConfigureAwait(false);
+
+        if (!attach.Success)
+        {
+            return new MountOperationResult(false, null, attach.ErrorMessage);
+        }
+
+        string wslMountPoint = $"/mnt/wsl/{mountName}";
+        bool useNoLoad = request.UseNoLoadJournal &&
+                         (string.IsNullOrWhiteSpace(fsType) ||
+                          fsType.Equals("ext4", StringComparison.OrdinalIgnoreCase) ||
+                          fsType.Equals("ext3", StringComparison.OrdinalIgnoreCase));
+        string usedOptions = useNoLoad ? "ro,noload" : "ro";
+        string fsTypeArg = !string.IsNullOrWhiteSpace(fsType) ? $"-t {fsType} " : string.Empty;
+
+        string mountCmd = $"mkdir -p '{wslMountPoint}' && mount {fsTypeArg}-o {usedOptions} '{attach.NbdDevicePath}' '{wslMountPoint}'";
+        log?.Invoke($"Mounting NBD device inside WSL2: mount {fsTypeArg}-o {usedOptions} {attach.NbdDevicePath} {wslMountPoint}");
+        WslCommandResult mountRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", mountCmd], cancellationToken)
+            .ConfigureAwait(false);
+
+        if (mountRes.ExitCode != 0 && usedOptions == "ro,noload")
+        {
+            log?.Invoke($"NBD mount with `ro,noload` failed ({CombineOutput(mountRes)}); retrying with `ro`...");
+            usedOptions = "ro";
+            string fallbackCmd = $"mkdir -p '{wslMountPoint}' && mount {fsTypeArg}-o ro '{attach.NbdDevicePath}' '{wslMountPoint}'";
+            mountRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", fallbackCmd], cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (mountRes.ExitCode != 0)
+        {
+            _ = await NbdDiskBridge.DisconnectInWslAsync(_runner, distro, attach.NbdDevicePath, CancellationToken.None).ConfigureAwait(false);
+            if (attach.Session is not null)
+            {
+                await attach.Session.DisposeAsync().ConfigureAwait(false);
+            }
+            _ = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "rmdir", wslMountPoint], CancellationToken.None).ConfigureAwait(false);
+            return new MountOperationResult(false, null, $"WSL2 NBD mount failed (exit {mountRes.ExitCode}): {CombineOutput(mountRes)}");
+        }
+
+        string uncPath = await ResolveAccessibleUncPathAsync(distro, mountName, wslMountPoint, log, cancellationToken)
+            .ConfigureAwait(false);
+
+        log?.Invoke($"Mapping {driveLetter}: -> {uncPath}");
+        DriveMappingResult mapResult = _mapDrive(driveLetter, uncPath);
+        if (!mapResult.Success)
+        {
+            log?.Invoke($"Drive mapping failed ({mapResult.Message}). Rolling back NBD mount...");
+            _ = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "umount", wslMountPoint], CancellationToken.None).ConfigureAwait(false);
+            _ = await NbdDiskBridge.DisconnectInWslAsync(_runner, distro, attach.NbdDevicePath, CancellationToken.None).ConfigureAwait(false);
+            if (attach.Session is not null)
+            {
+                await attach.Session.DisposeAsync().ConfigureAwait(false);
+            }
+            return new MountOperationResult(false, null, mapResult.Message);
+        }
+
+        if (attach.Session is not null)
+        {
+            _activeNbdSessions[mountName] = attach.Session;
+        }
+
+        var session = new MountSession
+        {
+            MountName = mountName,
+            SourceDeviceInWsl = attach.NbdDevicePath,
+            WslMountPoint = wslMountPoint,
+            UncPath = uncPath,
+            MappedDriveLetter = $"{driveLetter}:",
+            FileSystemType = fsType ?? "auto",
+            MountOptions = usedOptions,
+            IsReadOnly = true,
+            TargetWslDiskPath = targetDiskArg,
+            DiskIndex = request.DiskIndex,
+            PartitionNumber = request.PartitionNumber
+        };
+
+        log?.Invoke(mapResult.Message);
+        return new MountOperationResult(
+            true,
+            session,
+            $"Mounted {targetDiskArg} (Partition {request.PartitionNumber}) via WSL2 NBD bridge ({attach.NbdDevicePath}) on {driveLetter}: ({usedOptions}).");
+    }
+
+    private async Task<string> ResolveAccessibleUncPathAsync(
+        string distro,
+        string mountName,
+        string wslMountPoint,
+        Action<string>? log,
+        CancellationToken cancellationToken)
+    {
+        // Ensure the distro VM/9P server is awake and verify the mount directory exists.
+        var checkDir = await _runner.RunAsync(["-d", distro, "--", "test", "-d", wslMountPoint], cancellationToken).ConfigureAwait(false);
+        if (checkDir.ExitCode != 0)
+        {
+            log?.Invoke($"Warning: /mnt/wsl/{mountName} check returned exit code {checkDir.ExitCode}.");
+        }
+
+        string uncPath = $@"\\wsl.localhost\{distro}\mnt\wsl\{mountName}";
+        if (OperatingSystem.IsWindows() && !Directory.Exists(uncPath))
+        {
+            string legacyUnc = $@"\\wsl$\{distro}\mnt\wsl\{mountName}";
+            if (Directory.Exists(legacyUnc))
+            {
+                uncPath = legacyUnc;
+            }
+        }
+
+        return uncPath;
     }
 
     private async Task<(bool Success, string UsedOptions)> TryMountSiblingPartitionInWslAsync(
@@ -434,17 +637,43 @@ public sealed partial class WslMountService
             if (!string.IsNullOrWhiteSpace(distro))
             {
                 var active = await GetActiveMountsAsync(distro, cancellationToken).ConfigureAwait(false);
+                var nbdToDisconnect = new List<MountSession>();
+                bool hasNonNbdOnTarget = false;
+
                 foreach (var session in active)
                 {
                     if (!string.IsNullOrEmpty(session.TargetWslDiskPath) &&
-                        session.TargetWslDiskPath.Equals(unmountTarget, StringComparison.OrdinalIgnoreCase) &&
-                        !string.IsNullOrWhiteSpace(session.MappedDriveLetter))
+                        session.TargetWslDiskPath.Equals(unmountTarget, StringComparison.OrdinalIgnoreCase))
                     {
-                        char mappedLetter = char.ToUpperInvariant(session.MappedDriveLetter[0]);
-                        log?.Invoke($"Unmapping drive {mappedLetter}:...");
-                        var unmapRes = DriveMapper.UnmapDriveLetter(mappedLetter);
-                        log?.Invoke(unmapRes.Message);
+                        if (!string.IsNullOrWhiteSpace(session.MappedDriveLetter))
+                        {
+                            char mappedLetter = char.ToUpperInvariant(session.MappedDriveLetter[0]);
+                            log?.Invoke($"Unmapping drive {mappedLetter}:...");
+                            var unmapRes = DriveMapper.UnmapDriveLetter(mappedLetter);
+                            log?.Invoke(unmapRes.Message);
+                        }
+
+                        if (IsNbdDevice(session.SourceDeviceInWsl))
+                        {
+                            nbdToDisconnect.Add(session);
+                        }
+                        else
+                        {
+                            hasNonNbdOnTarget = true;
+                        }
                     }
+                }
+
+                foreach (var nbdSess in nbdToDisconnect)
+                {
+                    await UnmountSingleNbdSessionAsync(distro, nbdSess, log, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (nbdToDisconnect.Count > 0 && !hasNonNbdOnTarget)
+                {
+                    return new UnmountOperationResult(
+                        true,
+                        $"Successfully unmounted {nbdToDisconnect.Count} NBD mount(s) on {unmountTarget}.");
                 }
             }
         }
@@ -457,11 +686,19 @@ public sealed partial class WslMountService
             if (targetSession is not null)
             {
                 unmountTarget ??= targetSession.TargetWslDiskPath;
+                if (IsNbdDevice(targetSession.SourceDeviceInWsl))
+                {
+                    await UnmountSingleNbdSessionAsync(distro, targetSession, log, cancellationToken).ConfigureAwait(false);
+                    return new UnmountOperationResult(
+                        true,
+                        $"Successfully unmounted {targetSession.MountName} and disconnected NBD device {targetSession.SourceDeviceInWsl}.");
+                }
             }
 
             string baseDev = targetSession is not null ? GetBaseBlockDevice(targetSession.SourceDeviceInWsl) : string.Empty;
             otherPartitionsRemainOnSameBaseDevice = active.Any(m =>
                 !m.MountName.Equals(resolvedMountName, StringComparison.OrdinalIgnoreCase) &&
+                !IsNbdDevice(m.SourceDeviceInWsl) &&
                 ((!string.IsNullOrEmpty(baseDev) && GetBaseBlockDevice(m.SourceDeviceInWsl).Equals(baseDev, StringComparison.OrdinalIgnoreCase)) ||
                  (!string.IsNullOrEmpty(unmountTarget) && string.Equals(m.TargetWslDiskPath, unmountTarget, StringComparison.OrdinalIgnoreCase))));
         }
@@ -517,6 +754,34 @@ public sealed partial class WslMountService
         return driveLetter.HasValue
             ? new UnmountOperationResult(true, $"Unmapped {char.ToUpperInvariant(driveLetter.Value)}:. Specify --disk or --vhd if the physical disk is still attached in WSL2.")
             : new UnmountOperationResult(false, "Specify a drive letter (--letter), disk index (--disk), or VHD path (--vhd) to unmount.");
+    }
+
+    private static bool IsNbdDevice(string? devicePath) =>
+        !string.IsNullOrWhiteSpace(devicePath) &&
+        devicePath.StartsWith("/dev/nbd", StringComparison.OrdinalIgnoreCase);
+
+    private async Task UnmountSingleNbdSessionAsync(
+        string distro,
+        MountSession nbdSession,
+        Action<string>? log,
+        CancellationToken cancellationToken)
+    {
+        log?.Invoke($"Unmounting NBD mount point: wsl.exe -d {distro} -u root -- umount {nbdSession.WslMountPoint}");
+        _ = await _runner.RunAsync(
+            ["-d", distro, "-u", "root", "--", "umount", nbdSession.WslMountPoint],
+            cancellationToken).ConfigureAwait(false);
+        _ = await _runner.RunAsync(
+            ["-d", distro, "-u", "root", "--", "rmdir", nbdSession.WslMountPoint],
+            cancellationToken).ConfigureAwait(false);
+
+        log?.Invoke($"Disconnecting WSL2 NBD device {nbdSession.SourceDeviceInWsl}...");
+        _ = await NbdDiskBridge.DisconnectInWslAsync(_runner, distro, nbdSession.SourceDeviceInWsl, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (_activeNbdSessions.TryRemove(nbdSession.MountName, out IAsyncDisposable? activeNbd))
+        {
+            await activeNbd.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     public async Task<List<MountSession>> GetActiveMountsAsync(

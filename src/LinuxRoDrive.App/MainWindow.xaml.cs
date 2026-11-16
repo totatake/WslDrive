@@ -24,7 +24,7 @@ public sealed class PartitionRowViewModel
     public MountSession? ActiveSession { get; init; }
 
     public bool IsMounted => ActiveSession is not null;
-    public bool CanMount => !IsMounted && (IsVhdImage || (Disk.DiskIndex >= 0 && !Disk.HasWindowsMountedVolumes));
+    public bool CanMount => !IsMounted && (IsVhdImage || (Disk.DiskIndex >= 0 && (!Disk.HasWindowsMountedVolumes || Partition?.IsLinuxFileSystem == true)));
 
     public string DiskDisplay => IsVhdImage ? "VHDX" : (Disk.DiskIndex >= 0 ? $"Disk {Disk.DiskIndex}" : "Image");
     public string Model => Disk.Model;
@@ -52,7 +52,12 @@ public sealed class PartitionRowViewModel
             if (IsVhdImage) return "マウント可能 (.vhdx 仮想ディスク)";
             if (Disk.DiskIndex < 0) return "検査のみ (.img 生イメージ)";
             if (!string.IsNullOrWhiteSpace(Disk.ScanError)) return Disk.ScanError;
-            if (Disk.HasWindowsMountedVolumes) return $"Windows使用中 ({Disk.WindowsDriveLetters}) - マウント不可";
+            if (Disk.HasWindowsMountedVolumes)
+            {
+                return Partition is { IsLinuxFileSystem: true }
+                    ? $"マウント可能 (Linux FS / Windows同居 {Disk.WindowsDriveLetters}・NBDブリッジ)"
+                    : $"Windows使用中 ({Disk.WindowsDriveLetters}) - マウント不可";
+            }
             if (Partition is null) return Disk.PartitionStyle;
             return Partition.IsLinuxFileSystem ? "マウント可能 (Linux FS)" : Partition.PartitionTypeDescription;
         }
@@ -459,15 +464,22 @@ public partial class MainWindow : Window
 
         if (!row.IsVhdImage && row.Disk.HasWindowsMountedVolumes)
         {
-            var confirm = System.Windows.MessageBox.Show(
-                this,
-                $"Disk {row.Disk.DiskIndex} ({row.Disk.Model}) には現在 Windows が使用中のドライブ [{row.Disk.WindowsDriveLetters}] が含まれています。\n`wsl --mount` は Windows 使用中の物理ディスクをアタッチできません。\n\nそれでもマウントを試行しますか？",
-                "Windows 使用中ディスクの警告",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-            if (confirm != MessageBoxResult.Yes)
+            if (row.Partition?.IsLinuxFileSystem == true)
             {
-                return;
+                AppendLog($"Windows 使用中の物理ディスク ({row.Disk.WindowsDriveLetters}) のため、Read-Only NBD ブリッジ方式でマウントします...");
+            }
+            else
+            {
+                var confirm = System.Windows.MessageBox.Show(
+                    this,
+                    $"Disk {row.Disk.DiskIndex} ({row.Disk.Model}) には現在 Windows が使用中のドライブ [{row.Disk.WindowsDriveLetters}] が含まれています。\n`wsl --mount` は Windows 使用中の物理ディスクをアタッチできません。\n\nそれでもマウントを試行しますか？",
+                    "Windows 使用中ディスクの警告",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (confirm != MessageBoxResult.Yes)
+                {
+                    return;
+                }
             }
         }
 
@@ -496,7 +508,11 @@ public partial class MainWindow : Window
             DriveLetter = driveLetter,
             FileSystemType = row.Partition?.FileSystemType.ToWslTypeName(),
             UseNoLoadJournal = NoLoadCheckBox.IsChecked == true,
-            DistroName = distro
+            DistroName = distro,
+            PartitionOffsetBytes = row.Partition?.OffsetBytes,
+            PartitionSizeBytes = row.Partition?.SizeBytes,
+            SectorSize = row.Disk.SectorSize,
+            ForceNbdBridge = !row.IsVhdImage && row.Disk.HasWindowsMountedVolumes && row.Partition?.IsLinuxFileSystem == true
         };
 
         SetBusy(true);

@@ -14,7 +14,7 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 | **対応ファイルシステム** | ext2 / ext3 / ext4 のみ | **◎ ext4 / btrfs / xfs 等カーネル標準FS全般** | ext2 / ext3 / ext4 のみ |
 | **外部ドライバ導入** | Dokan / WinFsp のインストールが必要 | **◎ 不要（Windows 11 + WSL2標準機能のみ）** | Dokan / WinFsp のインストールが必要 |
 | **書き込み防止の安全性** | C#コード側でWrite拒否 | **◎ Linuxカーネルの `ro,noload` マウント** | Cコード側でWrite拒否 |
-| **Windows (C:等) と同居する物理ディスクの別パーティション** | ◎ マウント可能 | × 不可（Windows使用中ディスクは `ERROR_SHARING_VIOLATION`。別物理ドライブまたは `.vhdx` 専用） | ◎ マウント可能 |
+| **Windows (C:等) と同居する物理ディスクの別パーティション** | ◎ マウント可能 | **◎ マウント可能**（`AlignedDiskStream` ＋ WSL2 カーネル NBD Read-Only ブリッジで対応） | ◎ マウント可能 |
 | **同一の別物理ディスク（または `.vhdx`）内の複数パーティション同時マウント** | ◎ マウント可能 | **◎ マウント可能**（パーティション単位のセッション管理＋個別/一括アンマウント制御で対応） | ◎ マウント可能 |
 | **開発・保守の容易さ** | ◎ NuGetのみで完結 | **◎ 非常にシンプルかつ堅牢** | △ CライブラリのWindowsビルドが必要 |
 
@@ -106,6 +106,16 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
   - **最終デタッチ前のマウントポイント補完 (`EnsureStaleMountPointsBoundForDetachAsync`)**: ディスク全体の `wsl --unmount` が失敗した際（または未マウントの stale 状態からデタッチを試みる際）、過去に個別 `umount` 済みで空ディレクトリとして残っている `/mnt/wsl/linuxro_*` に対し、無害な自己バインドマウント（`mount --bind "$d" "$d"`）を補ってから `wsl --unmount` を再実行することで、`mini_init` の `umount()` ＋ `rmdir()` を正常完了させてディスクを確実にデタッチします。
   - **GUI 確認ダイアログ (`MainWindow.UnmountSessionAsync`)**: 同一ディスクに他のマウント中パーティションがある状態で単一行をアンマウントしようとした場合、「選択したパーティションのみ個別アンマウント (`[はい]`)」か「同一ディスクの全パーティションを一括アンマウント (`[いいえ]`)」かを確認し、意図しない兄弟ドライブの切断を防ぎます。
 
+### 課題⑦：Windows (`C:` 等) と同居する物理ディスク上の Linux パーティションのマウント（`ERROR_SHARING_VIOLATION` 回避と Read-Only NBD ブリッジ）
+- **現象と根本原因**:
+  - `wsl --mount \\.\PhysicalDrive0` は Hyper-V 仮想 SCSI 経由で物理ディスク全体を VM へパススルーするため、同じ物理ドライブ上に Windows がマウント中のボリューム（`C:` 等）が存在すると `ERROR_SHARING_VIOLATION` (`0x80070020`) でアタッチが拒否されます。
+  - 一方、Windows カーネルは管理者権限プロセスによる `CreateFileW("\\\\.\\PhysicalDrive0", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE)` でのセクタ境界読み取りは許可しています。
+- **解決設計 (`ReadOnlyNbdServer` / `NbdDiskBridge` / `WslMountService`)**:
+  - **ハイブリッド自動切替**: Windows 未使用の別ドライブや `.vhdx` はこれまで通りネイティブの `wsl --mount` を使用し、Windows 使用中の物理ディスク（`HasWindowsMountedVolumes == true` または `wsl --mount` が `ERROR_SHARING_VIOLATION` を返した場合）は自動的に **Read-Only NBD ブリッジ方式**へ切り替えます（`ForceNbdBridge`）。
+  - **WSL2 標準カーネル機能のみを利用（外部ドライバ・apt 不要）**: WSL2 標準カーネル（`5.15.x` 等）に標準搭載されている `CONFIG_BLK_DEV_NBD=m` を `modprobe nbd` でロードし、ディストロ標準の `python3`（`ctypes` + `socket.socketpair` + `NBD_SET_SOCK` / `NBD_SET_FLAGS(NBD_FLAG_READ_ONLY)` / `NBD_DO_IT` ioctl）経由で `/dev/nbdX` ブロックデバイスを構成します。
+  - **3重の Read-Only 保護**: Windows 側は `GENERIC_READ` 専用オープン＋対象パーティション範囲（`[OffsetBytes, OffsetBytes + SizeBytes)`）に限定した `AlignedDiskStream`、NBD プロトコル層は `NBD_CMD_READ` のみ許可し `NBD_CMD_WRITE` 等は `EROFS (30)` で拒否、Linux 側マウント時は `-o ro,noload`（必要に応じ `ro`）でマウントします。
+  - **CLI / GUI 双方でのライフサイクル管理**: GUI では `InProcessNbdBridgeProvider` がバックグラウンドタスクで NBD 要求を処理し、CLI では `DetachedProcessNbdBridgeProvider` が常駐用サブプロセス（`__nbd-daemon`）を起動して即時コマンドプロンプトへ戻ります。アンマウント時は `/dev/nbd*` デバイスを自動検出し、`umount /mnt/wsl/<name>` 後に `NBD_DISCONNECT` / `NBD_CLEAR_QUE` / `NBD_CLEAR_SOCK` を送信して安全に終了します。
+
 ---
 
 ## 4. システムアーキテクチャ・詳細設計
@@ -134,7 +144,8 @@ LinuxRoDrive/
 │   │   │   └── DiskScanner.cs            # WMI + Raw Disk走査 ＆ イメージファイル解析
 │   │   ├── Wsl/
 │   │   │   ├── WslCliRunner.cs           # wsl.exe 実行 & UTF-16LE/UTF-8 自動デコード
-│   │   │   └── WslMountService.cs        # wsl --mount / --unmount / /proc/mounts 照会
+│   │   │   ├── NbdDiskBridge.cs          # Windows同居ディスク向け Read-Only NBD ブリッジ
+│   │   │   └── WslMountService.cs        # wsl --mount / --unmount / NBDブリッジ / /proc/mounts 照会
 │   │   └── Interop/
 │   │       ├── NativeMethods.cs          # Win32 API P/Invoke 定義
 │   │       └── DriveMapper.cs            # UAC透過ドライブレター割当・解除・Explorer通知

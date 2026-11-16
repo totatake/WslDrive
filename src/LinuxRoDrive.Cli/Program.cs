@@ -9,6 +9,11 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "__nbd-daemon")
+        {
+            return await HandleNbdDaemonAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
+        }
+
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {
             PrintUsage();
@@ -166,16 +171,23 @@ internal static class Program
 
         WarnIfNotAdmin();
 
-        // Auto-detect filesystem type from superblock when mounting a physical disk partition if --fs wasn't specified
-        if (diskIndex.HasValue && string.IsNullOrWhiteSpace(fsType))
+        long? partitionOffsetBytes = null;
+        long? partitionSizeBytes = null;
+        int sectorSize = 512;
+        bool forceNbdBridge = false;
+
+        // Inspect physical disk metadata so NBD bridge geometry and auto-selected FS type/partition are available.
+        if (diskIndex.HasValue)
         {
             var scanner = new DiskScanner();
             var disk = scanner.ScanPhysicalDisks().FirstOrDefault(d => d.DiskIndex == diskIndex.Value);
             if (disk is not null)
             {
+                sectorSize = disk.SectorSize;
+                forceNbdBridge = disk.HasWindowsMountedVolumes;
                 if (disk.HasWindowsMountedVolumes)
                 {
-                    WriteWarning($"Disk {disk.DiskIndex} ({disk.Model}) contains active Windows drive(s) [{disk.WindowsDriveLetters}]. `wsl --mount` may fail with a sharing violation.");
+                    WriteInfo($"Disk {disk.DiskIndex} ({disk.Model}) contains active Windows drive(s) [{disk.WindowsDriveLetters}]. Will use Read-Only WSL2 NBD bridge.");
                 }
 
                 var part = partitionNumber.HasValue
@@ -184,7 +196,12 @@ internal static class Program
 
                 if (part is not null)
                 {
-                    fsType = part.FileSystemType.ToWslTypeName();
+                    partitionOffsetBytes = part.OffsetBytes;
+                    partitionSizeBytes = part.SizeBytes;
+                    if (string.IsNullOrWhiteSpace(fsType))
+                    {
+                        fsType = part.FileSystemType.ToWslTypeName();
+                    }
                     if (!partitionNumber.HasValue && part.PartitionNumber > 0)
                     {
                         partitionNumber = part.PartitionNumber;
@@ -203,10 +220,17 @@ internal static class Program
             MountName = mountName,
             FileSystemType = fsType,
             UseNoLoadJournal = useNoLoad,
-            DistroName = distroName
+            DistroName = distroName,
+            PartitionOffsetBytes = partitionOffsetBytes,
+            PartitionSizeBytes = partitionSizeBytes,
+            SectorSize = sectorSize,
+            ForceNbdBridge = forceNbdBridge
         };
 
-        var service = new WslMountService();
+        var service = new WslMountService(
+            new WslCliRunner(),
+            DriveMapper.MapDriveLetter,
+            new DetachedProcessNbdBridgeProvider());
         MountOperationResult result = await service.MountAsync(request, WriteInfo).ConfigureAwait(false);
         if (!result.Success || result.Session is null)
         {
@@ -359,7 +383,7 @@ internal static class Program
 
             if (disk.HasWindowsMountedVolumes)
             {
-                WriteWarning($"  Windows mounted volumes: {disk.WindowsDriveLetters} (wsl --mount cannot attach a physical disk already in use by Windows)");
+                WriteInfo($"  Windows mounted volumes: {disk.WindowsDriveLetters} (mounted via Read-Only NBD bridge instead of wsl --mount)");
             }
             if (!string.IsNullOrWhiteSpace(disk.ScanError))
             {
@@ -455,5 +479,65 @@ internal static class Program
               LinuxRoDrive.Cli status
               LinuxRoDrive.Cli unmount --letter L:
             """);
+    }
+
+    private static async Task<int> HandleNbdDaemonAsync(string[] args)
+    {
+        int diskIndex = -1;
+        long offset = -1;
+        long length = -1;
+        int sectorSize = 512;
+        string? distro = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--disk":
+                    diskIndex = int.Parse(RequireArgValue(args, ref i, "--disk"));
+                    break;
+                case "--offset":
+                    offset = long.Parse(RequireArgValue(args, ref i, "--offset"));
+                    break;
+                case "--length":
+                    length = long.Parse(RequireArgValue(args, ref i, "--length"));
+                    break;
+                case "--sector":
+                    sectorSize = int.Parse(RequireArgValue(args, ref i, "--sector"));
+                    break;
+                case "--distro":
+                    distro = RequireArgValue(args, ref i, "--distro");
+                    break;
+            }
+        }
+
+        if (diskIndex < 0 || offset < 0 || length <= 0 || string.IsNullOrWhiteSpace(distro))
+        {
+            Console.WriteLine($"{NbdDiskBridge.ErrorPrefix}Invalid __nbd-daemon arguments.");
+            Console.Out.Flush();
+            return 1;
+        }
+
+        var provider = new InProcessNbdBridgeProvider();
+        NbdBridgeAttachment attach = await provider.AttachPartitionAsync(
+            diskIndex,
+            offset,
+            length,
+            sectorSize,
+            distro).ConfigureAwait(false);
+
+        if (!attach.Success || attach.Session is not InProcessNbdSession session)
+        {
+            Console.WriteLine($"{NbdDiskBridge.ErrorPrefix}{attach.ErrorMessage}");
+            Console.Out.Flush();
+            return 1;
+        }
+
+        Console.WriteLine($"{NbdDiskBridge.ReadyPrefix}{attach.NbdDevicePath}");
+        Console.Out.Flush();
+        Console.SetOut(TextWriter.Null);
+
+        await session.Completion.ConfigureAwait(false);
+        return 0;
     }
 }

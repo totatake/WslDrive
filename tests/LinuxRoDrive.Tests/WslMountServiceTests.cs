@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 using LinuxRoDrive.Core.Interop;
 using LinuxRoDrive.Core.Models;
@@ -236,6 +237,157 @@ public sealed class WslMountServiceTests
         Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
         Assert.Contains(runner.RecordedCalls, c =>
             c.Contains("'/dev/sdc1'") && c.Contains("'/mnt/wsl/linuxro_d2p1'"));
+    }
+
+    [Fact]
+    public async Task ReadOnlyNbdServer_HandlesReadWriteFlushAndDisconnectRequests()
+    {
+        const long partitionOffset = 4096;
+        const long partitionLength = 8192;
+        byte[] backing = new byte[partitionOffset + partitionLength];
+        Encoding.ASCII.GetBytes("HELLO_EXT4_DATA").CopyTo(backing, (int)partitionOffset + 512);
+        using var diskStream = new MemoryStream(backing, writable: false);
+
+        using var input = new MemoryStream();
+        void AppendReq(ushort type, ulong handle, ulong offset, uint len, byte[]? writePayload = null)
+        {
+            byte[] hdr = new byte[28];
+            BinaryPrimitives.WriteUInt32BigEndian(hdr.AsSpan(0, 4), ReadOnlyNbdServer.RequestMagic);
+            BinaryPrimitives.WriteUInt16BigEndian(hdr.AsSpan(4, 2), 0);
+            BinaryPrimitives.WriteUInt16BigEndian(hdr.AsSpan(6, 2), type);
+            BinaryPrimitives.WriteUInt64BigEndian(hdr.AsSpan(8, 8), handle);
+            BinaryPrimitives.WriteUInt64BigEndian(hdr.AsSpan(16, 8), offset);
+            BinaryPrimitives.WriteUInt32BigEndian(hdr.AsSpan(24, 4), len);
+            input.Write(hdr);
+            if (writePayload is not null)
+            {
+                input.Write(writePayload);
+            }
+        }
+
+        AppendReq(ReadOnlyNbdServer.CmdRead, handle: 11, offset: 512, len: 15);
+        AppendReq(ReadOnlyNbdServer.CmdWrite, handle: 22, offset: 0, len: 4, writePayload: [1, 2, 3, 4]);
+        AppendReq(ReadOnlyNbdServer.CmdFlush, handle: 33, offset: 0, len: 0);
+        AppendReq(ReadOnlyNbdServer.CmdDisc, handle: 44, offset: 0, len: 0);
+        input.Position = 0;
+
+        using var output = new MemoryStream();
+        await ReadOnlyNbdServer.RunStreamLoopAsync(input, output, diskStream, partitionOffset, partitionLength);
+
+        byte[] outBytes = output.ToArray();
+        // Reply 1: READ (16 byte header + 15 bytes payload)
+        Assert.Equal(ReadOnlyNbdServer.ReplyMagic, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(0, 4)));
+        Assert.Equal(ReadOnlyNbdServer.ErrOk, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(4, 4)));
+        Assert.Equal(11UL, BinaryPrimitives.ReadUInt64BigEndian(outBytes.AsSpan(8, 8)));
+        Assert.Equal("HELLO_EXT4_DATA", Encoding.ASCII.GetString(outBytes, 16, 15));
+
+        // Reply 2: WRITE -> ErrRoFs (16 byte header)
+        int r2 = 31;
+        Assert.Equal(ReadOnlyNbdServer.ReplyMagic, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(r2, 4)));
+        Assert.Equal(ReadOnlyNbdServer.ErrRoFs, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(r2 + 4, 4)));
+        Assert.Equal(22UL, BinaryPrimitives.ReadUInt64BigEndian(outBytes.AsSpan(r2 + 8, 8)));
+
+        // Reply 3: FLUSH -> ErrOk (16 byte header)
+        int r3 = r2 + 16;
+        Assert.Equal(ReadOnlyNbdServer.ReplyMagic, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(r3, 4)));
+        Assert.Equal(ReadOnlyNbdServer.ErrOk, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(r3 + 4, 4)));
+        Assert.Equal(33UL, BinaryPrimitives.ReadUInt64BigEndian(outBytes.AsSpan(r3 + 8, 8)));
+        Assert.Equal(r3 + 16, outBytes.Length);
+    }
+
+    [Fact]
+    public async Task MountAsync_FallsBackToNbdBridge_WhenSharingViolationOrForceNbdBridge()
+    {
+        var runner = new SharingViolationWslRunner();
+        var nbdProvider = new FakeNbdBridgeProvider("/dev/nbd0");
+        var service = new WslMountService(
+            runner,
+            (letter, unc) => new DriveMappingResult(true, $"{letter}:", $"Mapped {letter}: -> {unc}", true),
+            nbdProvider);
+
+        var req = new MountRequest
+        {
+            DiskIndex = 0,
+            PartitionNumber = 3,
+            DriveLetter = 'L',
+            FileSystemType = "ext4",
+            UseNoLoadJournal = true,
+            DistroName = "Ubuntu",
+            PartitionOffsetBytes = 1048576,
+            PartitionSizeBytes = 64L * 1024 * 1024,
+            SectorSize = 512,
+            ForceNbdBridge = false
+        };
+
+        MountOperationResult result = await service.MountAsync(req);
+
+        Assert.True(result.Success);
+        Assert.Equal("/dev/nbd0", result.Session?.SourceDeviceInWsl);
+        Assert.Equal("ro,noload", result.Session?.MountOptions);
+        Assert.Equal(1, nbdProvider.AttachCallCount);
+        Assert.Contains(runner.RecordedCalls, c => c.Contains("'/dev/nbd0'") && c.Contains("'/mnt/wsl/linuxro_d0p3'"));
+    }
+
+    [Fact]
+    public async Task UnmountAsync_DisconnectsNbdDevice_WhenSessionUsesNbd()
+    {
+        var runner = new MultiPartitionWslRunner("/dev/nbd0 /mnt/wsl/linuxro_d0p3 ext4 ro,relatime,noload 0 0\n");
+        var service = new WslMountService(runner);
+
+        UnmountOperationResult result = await service.UnmountAsync(
+            driveLetter: null,
+            diskIndex: 0,
+            vhdPath: null,
+            distroName: "Ubuntu",
+            mountName: "linuxro_d0p3");
+
+        Assert.True(result.Success);
+        Assert.Contains(runner.RecordedCalls, c => c == "-d Ubuntu -u root -- umount /mnt/wsl/linuxro_d0p3");
+        Assert.Contains(runner.RecordedCalls, c => c.Contains("python3") && c.Contains("/dev/nbd0"));
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
+    }
+
+    private sealed class FakeNbdBridgeProvider(string nbdDevicePath) : INbdBridgeProvider
+    {
+        public int AttachCallCount { get; private set; }
+
+        public Task<NbdBridgeAttachment> AttachPartitionAsync(
+            int diskIndex,
+            long partitionOffset,
+            long partitionLength,
+            int sectorSize,
+            string distro,
+            Action<string>? log = null,
+            CancellationToken cancellationToken = default)
+        {
+            AttachCallCount++;
+            return Task.FromResult(new NbdBridgeAttachment(true, nbdDevicePath, string.Empty, null));
+        }
+    }
+
+    private sealed class SharingViolationWslRunner : IWslCommandRunner
+    {
+        public List<string> RecordedCalls { get; } = [];
+
+        public Task<WslCommandResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+        {
+            RecordedCalls.Add(string.Join(' ', arguments));
+
+            if (arguments.Contains("--mount"))
+            {
+                return Task.FromResult(new WslCommandResult(
+                    -1,
+                    "エラー コード: Wsl/Service/AttachDisk/ERROR_SHARING_VIOLATION (0x80070020)",
+                    string.Empty));
+            }
+
+            if (arguments.Contains("/proc/mounts"))
+            {
+                return Task.FromResult(new WslCommandResult(0, "none /mnt/wsl tmpfs rw,relatime 0 0\n", string.Empty));
+            }
+
+            return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
+        }
     }
 
     private sealed class MultiPartitionWslRunner(string procMountsOutput, bool failMountWithAlreadyMounted = false) : IWslCommandRunner

@@ -46,6 +46,27 @@ public sealed class MountRequest
     /// </summary>
     public string? DistroName { get; init; }
 
+    /// <summary>
+    /// Byte offset of the target partition from the start of the physical disk (used by the Read-Only NBD bridge).
+    /// </summary>
+    public long? PartitionOffsetBytes { get; init; }
+
+    /// <summary>
+    /// Size of the target partition in bytes (used by the Read-Only NBD bridge).
+    /// </summary>
+    public long? PartitionSizeBytes { get; init; }
+
+    /// <summary>
+    /// Physical disk sector size in bytes (default 512).
+    /// </summary>
+    public int SectorSize { get; init; } = 512;
+
+    /// <summary>
+    /// When true, bypasses `wsl --mount` (which fails with ERROR_SHARING_VIOLATION on disks with Windows volumes)
+    /// and mounts the partition directly via the Read-Only WSL2 NBD bridge.
+    /// </summary>
+    public bool ForceNbdBridge { get; init; }
+
     public string GetTargetWslDiskArgument()
     {
         if (!string.IsNullOrWhiteSpace(VhdPath))
