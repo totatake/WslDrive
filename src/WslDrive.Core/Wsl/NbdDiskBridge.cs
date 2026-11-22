@@ -95,6 +95,12 @@ public static class ReadOnlyNbdServer
 
             if (type == CmdWrite)
             {
+                if (length > MaxReadLengthBytes)
+                {
+                    await SendReplyHeaderAsync(output, replyBuf, ErrInvalid, handle, cancellationToken).ConfigureAwait(false);
+                    await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+                }
                 if (length > 0)
                 {
                     await DrainExactAsync(input, drainBuf, length, cancellationToken).ConfigureAwait(false);

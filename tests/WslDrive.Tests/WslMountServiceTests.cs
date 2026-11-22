@@ -297,6 +297,32 @@ public sealed class WslMountServiceTests
     }
 
     [Fact]
+    public async Task ReadOnlyNbdServer_RejectsOversizedWriteAndStopsLoop()
+    {
+        using var diskStream = new MemoryStream(new byte[4096], writable: false);
+        using var input = new MemoryStream();
+
+        byte[] hdr = new byte[28];
+        BinaryPrimitives.WriteUInt32BigEndian(hdr.AsSpan(0, 4), ReadOnlyNbdServer.RequestMagic);
+        BinaryPrimitives.WriteUInt16BigEndian(hdr.AsSpan(4, 2), 0);
+        BinaryPrimitives.WriteUInt16BigEndian(hdr.AsSpan(6, 2), ReadOnlyNbdServer.CmdWrite);
+        BinaryPrimitives.WriteUInt64BigEndian(hdr.AsSpan(8, 8), 99UL);
+        BinaryPrimitives.WriteUInt64BigEndian(hdr.AsSpan(16, 8), 0UL);
+        BinaryPrimitives.WriteUInt32BigEndian(hdr.AsSpan(24, 4), (64U * 1024U * 1024U) + 1U);
+        input.Write(hdr);
+        input.Position = 0;
+
+        using var output = new MemoryStream();
+        await ReadOnlyNbdServer.RunStreamLoopAsync(input, output, diskStream, 0, 4096);
+
+        byte[] outBytes = output.ToArray();
+        Assert.Equal(16, outBytes.Length);
+        Assert.Equal(ReadOnlyNbdServer.ReplyMagic, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(0, 4)));
+        Assert.Equal(ReadOnlyNbdServer.ErrInvalid, BinaryPrimitives.ReadUInt32BigEndian(outBytes.AsSpan(4, 4)));
+        Assert.Equal(99UL, BinaryPrimitives.ReadUInt64BigEndian(outBytes.AsSpan(8, 8)));
+    }
+
+    [Fact]
     public async Task MountAsync_FallsBackToNbdBridge_WhenSharingViolationOrForceNbdBridge()
     {
         var runner = new SharingViolationWslRunner();
