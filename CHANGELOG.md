@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
 ### Changed
 - Renamed project, solution/csproj files, namespaces, WSL mount prefix (`wslmountdrive_`), and NBD bridge handshake tokens (`WSLMOUNTDRIVE_NBD_*`) from `WslDrive` to `WslMountDrive` to avoid naming collision with `zcsizmadia/wsldrive`.
+- Added comparison section in `README.md` / `README.ja.md` explaining the difference from `zcsizmadia/wsldrive` (`hawserhq/wsldrive`).
+- Included the release version tag (`vX.X.X`) in release artifact filenames (`WslMountDrive-vX.X.X-win-x64.zip`).
 
 ## [0.2.0] - 2026-11-22
 

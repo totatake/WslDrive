@@ -11,6 +11,7 @@
 | `v0.1.0` (Completed) | Windows 同居ディスク向け Read-Only NBD ブリッジ | `AlignedDiskStream` + `ReadOnlyNbdServer` + WSL2 `/dev/nbdX` ハイブリッド自動切替、CLI 常駐 `__nbd-daemon` | [ADR-0005](adr/0005-read-only-nbd-bridge-for-windows-shared-disks.md) |
 | `v0.1.0` (Completed) | `WslMountDrive` への改称・任意 RW・日英 UI・標準 OSS 化 | 改称、CLI `--rw` / GUI RW 切替、日英自動切替（`Auto` / `日本語` / `English`）、`v0.1.0` リリース整備 | [ADR-0003](adr/0003-default-ro-noload-with-optional-rw.md), [docs/README.md](README.md) |
 | `v0.2.0` (Completed) | セキュリティ強化・ロールバック修正・CI/Release 整備 | `FileSystemType` 検証＆`sh -c` 廃止、NBD `CmdWrite` 上限、sibling/再利用ロールバック修正、未使用 P/Invoke 削除、CI 脆弱性＆タグ整合チェック | [SECURITY.md](../SECURITY.md), [ADR-0005](adr/0005-read-only-nbd-bridge-for-windows-shared-disks.md) |
+| `v0.3.0` (Completed) | `WslMountDrive` への改称・リリース成果物名へのバージョン付与 | プロジェクト／名前空間／接頭辞の改称、`README` への `wsldrive` との違い追記、リリース ZIP 名へのバージョン付与 | [CHANGELOG.md](../CHANGELOG.md) |
 
 ## 2. 今後の検討項目 (Future Horizons)
 
