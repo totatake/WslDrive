@@ -522,6 +522,58 @@ public sealed class WslMountServiceTests
         Assert.Throws<ArgumentException>(() => WslMountService.BuildMountArguments(req));
     }
 
+    [Fact]
+    public async Task MountAsync_RollbackOnMappingFailure_OnlyUmountsSiblingPartition()
+    {
+        var runner = new MultiPartitionWslRunner(
+            "/dev/sdc2 /mnt/wsl/wsldrive_d2p2 ext4 ro,relatime,noload 0 0\n",
+            failMountWithAlreadyMounted: true);
+        var service = new WslMountService(
+            runner,
+            (letter, _) => new DriveMappingResult(false, $"{letter}:", "Simulated mapping failure", false));
+
+        var req = new MountRequest
+        {
+            DiskIndex = 2,
+            PartitionNumber = 1,
+            DriveLetter = 'L',
+            FileSystemType = "ext4",
+            DistroName = "Ubuntu"
+        };
+
+        MountOperationResult result = await service.MountAsync(req);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
+        Assert.Contains(runner.RecordedCalls, c => c == "-d Ubuntu -u root -- umount /mnt/wsl/wsldrive_d2p1");
+    }
+
+    [Fact]
+    public async Task MountAsync_RollbackOnMappingFailure_DoesNotUnmountReusedMount()
+    {
+        var runner = new MultiPartitionWslRunner(
+            "/dev/sdc1 /mnt/wsl/wsldrive_d2p1 ext4 ro,relatime,noload 0 0\n",
+            failMountWithAlreadyMounted: true);
+        var service = new WslMountService(
+            runner,
+            (letter, _) => new DriveMappingResult(false, $"{letter}:", "Simulated mapping failure", false));
+
+        var req = new MountRequest
+        {
+            DiskIndex = 2,
+            PartitionNumber = 1,
+            DriveLetter = 'L',
+            FileSystemType = "ext4",
+            DistroName = "Ubuntu"
+        };
+
+        MountOperationResult result = await service.MountAsync(req);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("umount /mnt/wsl/wsldrive_d2p1"));
+    }
+
     private sealed class FakeNbdBridgeProvider(string nbdDevicePath) : INbdBridgeProvider
     {
         public int AttachCallCount { get; private set; }

@@ -214,6 +214,8 @@ public sealed partial class WslMountService
 
         List<string> mountArgs = BuildMountArguments(request, forceSimpleRo: false);
         string usedOptions = mountArgs[^1];
+        bool reusedExistingMount = false;
+        bool mountedViaSibling = false;
 
         log?.Invoke($"Running: wsl.exe {string.Join(' ', mountArgs)}");
         WslCommandResult mountResult = await _runner.RunAsync(mountArgs, cancellationToken).ConfigureAwait(false);
@@ -246,6 +248,7 @@ public sealed partial class WslMountService
                 string modeLabel = existingSameMount.IsReadOnly ? "read-only" : "read-write";
                 log?.Invoke($"Found existing {modeLabel} mount at {existingSameMount.WslMountPoint}; reusing and mapping drive letter {driveLetter}:...");
                 usedOptions = existingSameMount.MountOptions;
+                reusedExistingMount = true;
                 mountResult = new WslCommandResult(0, string.Empty, string.Empty);
             }
             else
@@ -269,6 +272,7 @@ public sealed partial class WslMountService
                     if (siblingMount.Success)
                     {
                         usedOptions = siblingMount.UsedOptions;
+                        mountedViaSibling = true;
                         mountResult = new WslCommandResult(0, string.Empty, string.Empty);
                     }
                 }
@@ -344,9 +348,23 @@ public sealed partial class WslMountService
         DriveMappingResult mapResult = _mapDrive(driveLetter, uncPath);
         if (!mapResult.Success)
         {
-            // Rollback WSL mount so disk is not left attached if drive mapping failed.
-            log?.Invoke($"Drive mapping failed ({mapResult.Message}). Rolling back WSL mount...");
-            await _runner.RunAsync(["--unmount", targetDiskArg], cancellationToken).ConfigureAwait(false);
+            // Rollback only what this MountAsync invocation actually attached/mounted.
+            if (reusedExistingMount)
+            {
+                log?.Invoke($"Drive mapping failed ({mapResult.Message}). Keeping existing WSL mount intact.");
+            }
+            else if (mountedViaSibling)
+            {
+                log?.Invoke($"Drive mapping failed ({mapResult.Message}). Unmounting sibling partition only...");
+                _ = await _runner.RunAsync(
+                    ["-d", distro, "-u", "root", "--", "umount", wslMountPoint],
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                log?.Invoke($"Drive mapping failed ({mapResult.Message}). Rolling back WSL mount...");
+                _ = await _runner.RunAsync(["--unmount", targetDiskArg], CancellationToken.None).ConfigureAwait(false);
+            }
             return new MountOperationResult(false, null, mapResult.Message);
         }
 
