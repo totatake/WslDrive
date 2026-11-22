@@ -20,6 +20,13 @@ internal static class Program
             return 0;
         }
 
+        if (args[0] is "-v" or "--version" or "version")
+        {
+            string ver = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+            Console.WriteLine($"WslDrive.Cli v{ver}");
+            return 0;
+        }
+
         string command = args[0].ToLowerInvariant();
         string[] rest = args.Skip(1).ToArray();
 
@@ -472,8 +479,9 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("""
-            WslDrive.Cli - Linux Partition Mounter for Windows 11 (WSL2) [Default: RO, optional --rw]
+        string ver = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+        Console.WriteLine($"""
+            WslDrive.Cli v{ver} - Linux Partition Mounter for Windows 11 (WSL2) [Default: RO, optional --rw]
 
             Usage:
               WslDrive.Cli list [--all] [--image <file>]
@@ -481,6 +489,7 @@ internal static class Program
               WslDrive.Cli mount --vhd <path> [--partition <num>] [--letter <L:>] [--name <name>] [--fs <type>] [--rw|--ro] [--no-noload] [--distro <name>]
               WslDrive.Cli unmount [--letter <L:>] [--disk <index>] [--vhd <path>] [--distro <name>]
               WslDrive.Cli status [--distro <name>]
+              WslDrive.Cli --version
 
             Examples:
               WslDrive.Cli list

@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | :--- | :--- |
-| Latest (`master`) | Yes |
-| Older commits / snapshots | Best-effort / No |
+| `v0.1.x` (`master`) | Yes |
+| Pre-`v0.1.0` snapshots | No |
 
 ## Security Model & Privilege Boundaries
 

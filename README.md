@@ -2,7 +2,7 @@
 
 > **Mount Linux partitions (`ext4` / `btrfs` / `xfs`) on Windows 11 as native drive letters via WSL2 — safe Read-Only (`ro,noload`) by default, with optional Read-Write (`--rw`) support.**
 
-**Language:** English | [日本語](README.ja.md)
+**Version:** `v0.1.0` | **Language:** English | [日本語](README.ja.md)
 
 ---
 
