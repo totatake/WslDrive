@@ -13,9 +13,6 @@ internal static class NativeMethods
 
     internal const uint IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C;
 
-    internal const uint RESOURCETYPE_DISK = 0x00000001;
-    internal const uint CONNECT_TEMPORARY = 0x00000004;
-
     internal const uint DDD_RAW_TARGET_PATH = 0x00000001;
     internal const uint DDD_REMOVE_DEFINITION = 0x00000002;
     internal const uint DDD_EXACT_MATCH_ON_REMOVE = 0x00000004;
@@ -65,26 +62,6 @@ internal static class NativeMethods
         uint nOutBufferSize,
         out uint lpBytesReturned,
         IntPtr lpOverlapped);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    internal struct NETRESOURCE
-    {
-        public uint dwScope;
-        public uint dwType;
-        public uint dwDisplayType;
-        public uint dwUsage;
-        public string? lpLocalName;
-        public string? lpRemoteName;
-        public string? lpComment;
-        public string? lpProvider;
-    }
-
-    [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
-    internal static extern int WNetAddConnection2W(
-        ref NETRESOURCE lpNetResource,
-        string? lpPassword,
-        string? lpUserName,
-        uint dwFlags);
 
     [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
     internal static extern int WNetCancelConnection2W(

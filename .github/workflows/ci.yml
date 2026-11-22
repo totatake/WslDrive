@@ -27,3 +27,13 @@ jobs:
 
       - name: Run unit tests (Release)
         run: dotnet test WslDrive.sln -c Release --no-build --verbosity normal
+
+      - name: Check vulnerable NuGet packages
+        shell: pwsh
+        run: |
+          $out = dotnet list WslDrive.sln package --vulnerable --include-transitive | Out-String
+          Write-Host $out
+          if ($out -match '(?i)\b(High|Critical)\b') {
+            Write-Error "High or Critical NuGet vulnerabilities detected."
+            exit 1
+          }

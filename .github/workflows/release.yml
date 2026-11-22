@@ -16,6 +16,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify release tag matches project version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          [xml]$csproj = Get-Content src/WslDrive.App/WslDrive.App.csproj
+          $ver = $csproj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if ($tag -ne $ver) {
+            Write-Error "Git tag '$tag' does not match WslDrive.App.csproj Version '$ver'."
+            exit 1
+          }
+
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:

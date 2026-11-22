@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Validated `FileSystemType` strictly (`[A-Za-z0-9][A-Za-z0-9._-]{0,31}`) and replaced `sh -c` string concatenation with direct argument passing in `WslMountService` to prevent shell command injection.
+- Rejected oversized `CmdWrite` payloads exceeding `MaxReadLengthBytes` in `ReadOnlyNbdServer`.
+- Added NuGet vulnerability scanning (`dotnet list package --vulnerable --include-transitive`) in CI and tag-to-version verification in Release workflow.
+
+### Fixed
+- Fixed drive-mapping failure rollback in `WslMountService.MountAsync` so sibling mounts only `umount` the newly mounted path and reused mounts are preserved without detaching the entire disk.
+- Removed unused `WNetAddConnection2W` P/Invoke definition from `NativeMethods`.
+
 ## [0.1.0] - 2026-11-22
 
 ### Added
