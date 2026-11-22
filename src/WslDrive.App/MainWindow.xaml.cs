@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using WslDrive.App.Localization;
 using WslDrive.Core.Disk;
 using WslDrive.Core.Interop;
 using WslDrive.Core.Models;
@@ -28,7 +29,7 @@ public sealed class PartitionRowViewModel
 
     public string DiskDisplay => IsVhdImage ? "VHDX" : (Disk.DiskIndex >= 0 ? $"Disk {Disk.DiskIndex}" : "Image");
     public string Model => Disk.Model;
-    public string PartitionDisplay => Partition is null ? "1 (自動)" : (Partition.PartitionNumber == 0 ? "RAW" : Partition.PartitionNumber.ToString());
+    public string PartitionDisplay => Partition is null ? AppStrings.Instance.PartitionAuto : (Partition.PartitionNumber == 0 ? "RAW" : Partition.PartitionNumber.ToString());
     public string FileSystemDisplay => Partition?.FileSystemType.ToString() ?? "VHDX";
     public string LabelDisplay => Partition is null
         ? Path.GetFileNameWithoutExtension(Disk.DevicePath)
@@ -42,24 +43,25 @@ public sealed class PartitionRowViewModel
     {
         get
         {
+            var s = AppStrings.Instance;
             if (ActiveSession is not null)
             {
                 string drive = !string.IsNullOrEmpty(ActiveSession.MappedDriveLetter)
                     ? ActiveSession.MappedDriveLetter
                     : ActiveSession.MountName;
-                return $"✅ マウント中 ({drive} / {ActiveSession.MountOptions})";
+                return s.StatusMounted(drive, ActiveSession.MountOptions);
             }
-            if (IsVhdImage) return "マウント可能 (.vhdx 仮想ディスク)";
-            if (Disk.DiskIndex < 0) return "検査のみ (.img 生イメージ)";
+            if (IsVhdImage) return s.StatusVhdxMountable;
+            if (Disk.DiskIndex < 0) return s.StatusRawImgInspectOnly;
             if (!string.IsNullOrWhiteSpace(Disk.ScanError)) return Disk.ScanError;
             if (Disk.HasWindowsMountedVolumes)
             {
                 return Partition is { IsLinuxFileSystem: true }
-                    ? $"マウント可能 (Linux FS / Windows同居 {Disk.WindowsDriveLetters}・NBDブリッジ)"
-                    : $"Windows使用中 ({Disk.WindowsDriveLetters}) - マウント不可";
+                    ? s.StatusSharedNbdMountable(Disk.WindowsDriveLetters)
+                    : s.StatusWindowsInUseNotMountable(Disk.WindowsDriveLetters);
             }
             if (Partition is null) return Disk.PartitionStyle;
-            return Partition.IsLinuxFileSystem ? "マウント可能 (Linux FS)" : Partition.PartitionTypeDescription;
+            return Partition.IsLinuxFileSystem ? s.StatusLinuxMountable : Partition.PartitionTypeDescription;
         }
     }
 }
@@ -74,6 +76,8 @@ public partial class MainWindow : Window
     private readonly List<PhysicalDiskEntry> _inspectedImages = [];
     private List<MountSession> _activeMounts = [];
     private readonly Dictionary<string, string> _mountNameToTargetPath = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record LanguageOption(UiLanguageMode Mode, string Label);
 
     private bool _allowExit;
     private bool _isBusy;
@@ -90,6 +94,15 @@ public partial class MainWindow : Window
             onUnmountAllAndExit: () => Dispatcher.Invoke(() => _ = UnmountAllAndExitAsync()),
             onExitOnly: () => Dispatcher.Invoke(ExitApplication));
 
+        LanguageComboBox.ItemsSource = new LanguageOption[]
+        {
+            new(UiLanguageMode.Auto, "Auto"),
+            new(UiLanguageMode.Japanese, "日本語"),
+            new(UiLanguageMode.English, "English")
+        };
+        LanguageComboBox.SelectedValue = UiLanguageMode.Auto;
+        ApplyLanguage();
+
         Loaded += MainWindow_Loaded;
     }
 
@@ -100,33 +113,99 @@ public partial class MainWindow : Window
         await RefreshAllAsync();
     }
 
+    private void LanguageComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (LanguageComboBox.SelectedValue is not UiLanguageMode mode) return;
+
+        AppStrings.Instance.Mode = mode;
+        ApplyLanguage();
+        if (IsLoaded)
+        {
+            RebuildPartitionRows();
+            _trayManager.UpdateMounts(_activeMounts);
+        }
+    }
+
+    private void ApplyLanguage()
+    {
+        var s = AppStrings.Instance;
+
+        Title = s.WindowTitle;
+        HeaderSubtitleText.Text = s.HeaderSubtitle;
+        LanguageLabel.Text = s.LanguageLabel;
+        WslDistroLabel.Text = s.WslDistroLabel;
+        RelaunchAdminButton.Content = s.RelaunchAdmin;
+        BannerUnmountAllButton.Content = s.UnmountAll;
+
+        RefreshButton.Content = s.RefreshDisks;
+        InspectImageButton.Content = s.OpenImage;
+        OnlyLinuxCheckBox.Content = s.OnlyLinuxPartitions;
+
+        PartitionsGroupBox.Header = s.PartitionsHeader;
+        ColDisk.Header = s.ColDisk;
+        ColModel.Header = s.ColModel;
+        ColPartition.Header = s.ColPartition;
+        ColFs.Header = s.ColFs;
+        ColLabel.Header = s.ColLabel;
+        ColSize.Header = s.ColSize;
+        ColDrive.Header = s.ColDrive;
+        ColStatus.Header = s.ColStatus;
+
+        DriveLetterLabel.Text = s.DriveLetterLabel;
+        ReadWriteCheckBox.Content = s.ReadWriteCheck;
+        ReadWriteCheckBox.ToolTip = s.ReadWriteToolTip;
+        NoLoadCheckBox.Content = s.NoLoadCheck;
+        NoLoadCheckBox.ToolTip = s.NoLoadToolTip;
+        OpenExplorerCheckBox.Content = s.OpenExplorerCheck;
+        UnmountButton.Content = s.UnmountSelected;
+
+        ActiveMountsGroupBox.Header = s.ActiveMountsHeader;
+        ColActiveDrive.Header = s.ColActiveDrive;
+        ColActiveMode.Header = s.ColActiveMode;
+        ColActiveMountName.Header = s.ColActiveMountName;
+        ColActiveFs.Header = s.ColActiveFs;
+        ColActiveDevice.Header = s.ColActiveDevice;
+        ColActiveOptions.Header = s.ColActiveOptions;
+        ColActiveUnc.Header = s.ColActiveUnc;
+        ColActiveActions.Header = s.ColActiveActions;
+
+        LogExpander.Header = s.LogHeader;
+        CopyLogButton.Content = s.CopyLog;
+        ClearLogButton.Content = s.ClearLog;
+
+        UpdateAdminBadge();
+        UpdateMountModeUi();
+        UpdateStatusBanner();
+    }
+
     private void UpdateAdminBadge()
     {
         bool isAdmin = DiskScanner.IsRunningAsAdministrator();
         AdminBadge.Background = new SolidColorBrush(isAdmin
             ? System.Windows.Media.Color.FromRgb(46, 125, 50)
             : System.Windows.Media.Color.FromRgb(183, 28, 28));
-        AdminBadgeText.Text = isAdmin ? "管理者権限 (OK)" : "非管理者 (制限あり)";
+        AdminBadgeText.Text = isAdmin ? AppStrings.Instance.AdminOk : AppStrings.Instance.AdminLimited;
         RelaunchAdminButton.Visibility = isAdmin ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private async Task RefreshAllAsync()
     {
+        var s = AppStrings.Instance;
         SetBusy(true);
         try
         {
-            AppendLog("物理ディスクおよび WSL2 マウント状態をスキャンしています...");
+            AppendLog(s.LogScanning);
             await RefreshDistrosAsync();
 
             _scannedDisks = await Task.Run(() => _diskScanner.ScanPhysicalDisks());
             await RefreshActiveMountsAndDriveLettersAsync();
 
             int linuxPartCount = _scannedDisks.Sum(d => d.Partitions.Count(p => p.IsLinuxFileSystem));
-            AppendLog($"スキャン完了: 物理ディスク {_scannedDisks.Count} 台、Linux パーティション {linuxPartCount} 件を検出しました。");
+            AppendLog(s.LogScanComplete(_scannedDisks.Count, linuxPartCount));
         }
         catch (Exception ex)
         {
-            AppendLog($"スキャン中にエラーが発生しました: {ex.Message}");
+            AppendLog(s.LogScanError(ex.Message));
         }
         finally
         {
@@ -190,13 +269,14 @@ public partial class MainWindow : Window
 
     private void UpdateStatusBanner()
     {
+        var s = AppStrings.Instance;
         if (_activeMounts.Count > 0)
         {
             string drives = string.Join(", ", _activeMounts.Select(m => $"{m.MappedDriveLetter ?? m.MountName} ({m.AccessModeDisplay})"));
             StatusBanner.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(232, 245, 233));
             StatusBanner.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(165, 214, 167));
             StatusBannerText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(27, 94, 32));
-            StatusBannerText.Text = $"🟢 現在 {_activeMounts.Count} 件の Linux パーティションをマウント中です ({drives})。";
+            StatusBannerText.Text = s.StatusActiveMounts(_activeMounts.Count, drives);
             BannerUnmountAllButton.Visibility = Visibility.Visible;
         }
         else
@@ -204,7 +284,7 @@ public partial class MainWindow : Window
             StatusBanner.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(235, 243, 254));
             StatusBanner.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(182, 212, 254));
             StatusBannerText.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(8, 66, 152));
-            StatusBannerText.Text = "💡 下のリストから Linux パーティションを選択して「選択行をマウント」を押すだけで、すぐにエクスプローラーで開けます（デフォルト: RO / RW 切替可、VHDX のドラッグ＆ドロップにも対応）。";
+            StatusBannerText.Text = s.StatusIdle;
             BannerUnmountAllButton.Visibility = Visibility.Collapsed;
         }
     }
@@ -307,7 +387,7 @@ public partial class MainWindow : Window
     {
         bool isRw = ReadWriteCheckBox.IsChecked == true;
         NoLoadCheckBox.IsEnabled = !isRw;
-        MountButton.Content = isRw ? "▶ 選択行をマウント (RW)" : "▶ 選択行をマウント (RO)";
+        MountButton.Content = isRw ? AppStrings.Instance.MountSelectedRw : AppStrings.Instance.MountSelectedRo;
         MountButton.Background = new SolidColorBrush(isRw
             ? System.Windows.Media.Color.FromRgb(0xD9, 0x77, 0x06)
             : System.Windows.Media.Color.FromRgb(0x1F, 0x6F, 0xEB));
@@ -360,16 +440,17 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendLog($"管理者としての再起動がキャンセルまたは失敗しました: {ex.Message}");
+            AppendLog(AppStrings.Instance.LogRelaunchFailed(ex.Message));
         }
     }
 
     private void InspectImageButton_Click(object sender, RoutedEventArgs e)
     {
+        var s = AppStrings.Instance;
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "ディスクイメージ / VHDX ファイルを選択 (.vhdx / .vhd / .img)",
-            Filter = "ディスクイメージ (*.vhdx;*.vhd;*.img;*.raw)|*.vhdx;*.vhd;*.img;*.raw|すべてのファイル (*.*)|*.*"
+            Title = s.OpenImageDialogTitle,
+            Filter = s.OpenImageDialogFilter
         };
 
         if (dialog.ShowDialog(this) == true)
@@ -409,11 +490,12 @@ public partial class MainWindow : Window
             _inspectedImages.RemoveAll(d => d.DevicePath.Equals(inspected.DevicePath, StringComparison.OrdinalIgnoreCase));
             _inspectedImages.Add(inspected);
             RebuildPartitionRows();
-            AppendLog($"イメージを検査・追加しました: {filePath} ({inspected.PartitionStyle})");
+            AppendLog(AppStrings.Instance.LogImageAdded(filePath, inspected.PartitionStyle));
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(this, $"イメージの読み取りに失敗しました:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            var s = AppStrings.Instance;
+            System.Windows.MessageBox.Show(this, s.ImageReadError(ex.Message), s.ErrorTitle, MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -459,7 +541,8 @@ public partial class MainWindow : Window
     {
         if (PartitionsGrid.SelectedItem is not PartitionRowViewModel row)
         {
-            System.Windows.MessageBox.Show(this, "マウントする Linux パーティションまたは VHDX 行を選択してください。", "選択なし", MessageBoxButton.OK, MessageBoxImage.Information);
+            var s = AppStrings.Instance;
+            System.Windows.MessageBox.Show(this, s.NoSelectionMsg, s.NoSelectionTitle, MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -474,12 +557,13 @@ public partial class MainWindow : Window
 
     private async Task MountRowAsync(PartitionRowViewModel row)
     {
+        var s = AppStrings.Instance;
         if (!row.IsVhdImage && row.Disk.DiskIndex < 0)
         {
             System.Windows.MessageBox.Show(
                 this,
-                "生イメージ (.img) は `wsl --mount` に直接渡せません。.vhdx 形式に変換するか、物理ディスクまたは .vhdx ファイルを選択してください。",
-                "非対応のイメージ形式",
+                s.RawImgUnsupportedMsg,
+                s.UnsupportedImageFormatTitle,
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
@@ -495,20 +579,20 @@ public partial class MainWindow : Window
                 {
                     System.Windows.MessageBox.Show(
                         this,
-                        "Windows 使用中の物理ディスク（NBD ブリッジ方式）は安全のため読み取り専用 (RO) マウントのみ対応しています。\n読み取り専用でマウントするか、別の物理ディスク / .vhdx を使用してください。",
-                        "RW マウント非対応",
+                        s.NbdRwUnsupportedMsg,
+                        s.NbdRwUnsupportedTitle,
                         MessageBoxButton.OK,
                         MessageBoxImage.Warning);
                     return;
                 }
-                AppendLog($"Windows 使用中の物理ディスク ({row.Disk.WindowsDriveLetters}) のため、Read-Only NBD ブリッジ方式でマウントします...");
+                AppendLog(s.LogUsingNbdBridge(row.Disk.WindowsDriveLetters));
             }
             else
             {
                 var confirm = System.Windows.MessageBox.Show(
                     this,
-                    $"Disk {row.Disk.DiskIndex} ({row.Disk.Model}) には現在 Windows が使用中のドライブ [{row.Disk.WindowsDriveLetters}] が含まれています。\n`wsl --mount` は Windows 使用中の物理ディスクをアタッチできません。\n\nそれでもマウントを試行しますか？",
-                    "Windows 使用中ディスクの警告",
+                    s.WindowsInUseWarningMsg(row.Disk.DiskIndex, row.Disk.Model, row.Disk.WindowsDriveLetters),
+                    s.WindowsInUseWarningTitle,
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
                 if (confirm != MessageBoxResult.Yes)
@@ -524,7 +608,7 @@ public partial class MainWindow : Window
             var free = DriveMapper.GetAvailableDriveLetters();
             if (free.Count == 0)
             {
-                System.Windows.MessageBox.Show(this, "利用可能な空きドライブレターがありません。", "ドライブレター不足", MessageBoxButton.OK, MessageBoxImage.Warning);
+                System.Windows.MessageBox.Show(this, s.NoFreeDriveLettersMsg, s.NoFreeDriveLettersTitle, MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             selectedLetter = $"{free[0]}:";
@@ -557,8 +641,8 @@ public partial class MainWindow : Window
             MountOperationResult result = await _mountService.MountAsync(request, msg => Dispatcher.Invoke(() => AppendLog(msg)));
             if (!result.Success || result.Session is null)
             {
-                AppendLog($"マウント失敗: {result.Message}");
-                System.Windows.MessageBox.Show(this, result.Message, "マウント失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+                AppendLog(s.LogMountFailed(result.Message));
+                System.Windows.MessageBox.Show(this, result.Message, s.MountFailedTitle, MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -567,9 +651,8 @@ public partial class MainWindow : Window
                 _mountNameToTargetPath[result.Session.MountName] = result.Session.TargetWslDiskPath;
             }
 
-            AppendLog($"成功: {result.Message}");
-            string modeText = result.Session.IsReadOnly ? "読み取り専用 (RO)" : "読み書き可能 (RW)";
-            _trayManager.ShowBalloon("WslDrive - マウント完了", $"{result.Session.MappedDriveLetter}\\ に {modeText} でマウントしました。");
+            AppendLog(s.LogSuccess(result.Message));
+            _trayManager.ShowBalloon(s.BalloonMountCompleteTitle, s.BalloonMountCompleteBody(result.Session.MappedDriveLetter, result.Session.IsReadOnly));
             await RefreshActiveMountsAndDriveLettersAsync();
 
             if (OpenExplorerCheckBox.IsChecked == true)
@@ -610,7 +693,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        System.Windows.MessageBox.Show(this, "アンマウントする行を選択してください。", "アンマウント", MessageBoxButton.OK, MessageBoxImage.Information);
+        var s = AppStrings.Instance;
+        System.Windows.MessageBox.Show(this, s.SelectUnmountRowMsg, s.UnmountTitle, MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private async void UnmountAllButton_Click(object sender, RoutedEventArgs e)
@@ -636,7 +720,7 @@ public partial class MainWindow : Window
                 distroName: distro,
                 log: msg => Dispatcher.Invoke(() => AppendLog(msg)));
 
-            AppendLog(result.Success ? $"WSL ディスク切り離し完了: {result.Message}" : $"WSL ディスク切り離し結果: {result.Message}");
+            AppendLog(AppStrings.Instance.LogWslDetachResult(result.Success, result.Message));
             await RefreshActiveMountsAndDriveLettersAsync();
         }
         finally
@@ -666,8 +750,8 @@ public partial class MainWindow : Window
 
                 var choice = System.Windows.MessageBox.Show(
                     this,
-                    $"同じディスク上に他にもマウント中のパーティションがあります ({siblingList})。\n\n[はい]: 選択した {sessionDrive} ({session.MountName}) のみ個別にアンマウントする\n[いいえ]: このディスクの全パーティションを一括アンマウントして切り離す\n[キャンセル]: キャンセル",
-                    "複数パーティションのアンマウント確認",
+                    AppStrings.Instance.MultiPartitionUnmountMsg(siblingList, sessionDrive, session.MountName),
+                    AppStrings.Instance.MultiPartitionUnmountTitle,
                     MessageBoxButton.YesNoCancel,
                     MessageBoxImage.Question);
 
@@ -708,7 +792,7 @@ public partial class MainWindow : Window
                 _mountNameToTargetPath.Remove(session.MountName);
             }
 
-            AppendLog(result.Success ? $"アンマウント完了: {result.Message}" : $"アンマウント警告: {result.Message}");
+            AppendLog(AppStrings.Instance.LogUnmountResult(result.Success, result.Message));
             await RefreshActiveMountsAndDriveLettersAsync();
         }
         finally
@@ -787,8 +871,8 @@ public partial class MainWindow : Window
         {
             var res = System.Windows.MessageBox.Show(
                 this,
-                $"現在 {_activeMounts.Count} 件の Linux パーティションがマウント中です。\n終了前にすべてアンマウント（安全な取り外し）しますか？\n\n[はい]: すべてアンマウントして終了\n[いいえ]: マウントを維持したまま終了\n[キャンセル]: 終了しない",
-                "WslDrive の終了確認",
+                AppStrings.Instance.ExitConfirmMsg(_activeMounts.Count),
+                AppStrings.Instance.ExitConfirmTitle,
                 MessageBoxButton.YesNoCancel,
                 MessageBoxImage.Question);
 

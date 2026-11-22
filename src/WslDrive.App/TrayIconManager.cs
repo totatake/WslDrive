@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using WslDrive.App.Localization;
 using WslDrive.Core.Models;
 
 namespace WslDrive.App;
@@ -49,7 +50,7 @@ public sealed class TrayIconManager : IDisposable
         _notifyIcon = new NotifyIcon
         {
             Icon = _trayIcon,
-            Text = "WslDrive - Linux パーティション マウンター (WSL2)",
+            Text = AppStrings.Instance.TrayTooltipIdle,
             ContextMenuStrip = _contextMenu,
             Visible = true
         };
@@ -62,9 +63,10 @@ public sealed class TrayIconManager : IDisposable
     {
         if (_disposed) return;
 
+        var s = AppStrings.Instance;
         _contextMenu.Items.Clear();
 
-        var openWinItem = new ToolStripMenuItem("WslDrive ウィンドウを開く")
+        var openWinItem = new ToolStripMenuItem(s.TrayOpenWindow)
         {
             Font = new Font(_contextMenu.Font, FontStyle.Bold)
         };
@@ -74,7 +76,7 @@ public sealed class TrayIconManager : IDisposable
 
         if (activeMounts.Count == 0)
         {
-            var emptyItem = new ToolStripMenuItem("現在マウント中のドライブはありません") { Enabled = false };
+            var emptyItem = new ToolStripMenuItem(s.TrayNoMounts) { Enabled = false };
             _contextMenu.Items.Add(emptyItem);
         }
         else
@@ -91,12 +93,12 @@ public sealed class TrayIconManager : IDisposable
                 if (!string.IsNullOrEmpty(session.MappedDriveLetter))
                 {
                     string drive = session.MappedDriveLetter;
-                    var openDriveItem = new ToolStripMenuItem($"{drive}\\ をエクスプローラーで開く");
+                    var openDriveItem = new ToolStripMenuItem(s.TrayOpenInExplorer(drive));
                     openDriveItem.Click += (_, _) => _onOpenDrive(drive);
                     mountMenu.DropDownItems.Add(openDriveItem);
                 }
 
-                var unmountItem = new ToolStripMenuItem("アンマウント（安全な取り外し）");
+                var unmountItem = new ToolStripMenuItem(s.TrayUnmountSafely);
                 unmountItem.Click += (_, _) => _onUnmountSession(session);
                 mountMenu.DropDownItems.Add(unmountItem);
 
@@ -108,18 +110,18 @@ public sealed class TrayIconManager : IDisposable
 
         if (activeMounts.Count > 0)
         {
-            var unmountAllExit = new ToolStripMenuItem("すべてアンマウントして終了");
+            var unmountAllExit = new ToolStripMenuItem(s.TrayUnmountAllAndExit);
             unmountAllExit.Click += (_, _) => _onUnmountAllAndExit();
             _contextMenu.Items.Add(unmountAllExit);
         }
 
-        var exitItem = new ToolStripMenuItem("マウントを維持したままアプリを終了");
+        var exitItem = new ToolStripMenuItem(s.TrayExitKeepMounts);
         exitItem.Click += (_, _) => _onExitOnly();
         _contextMenu.Items.Add(exitItem);
 
         _notifyIcon.Text = activeMounts.Count > 0
-            ? $"WslDrive ({activeMounts.Count} 件マウント中)"
-            : "WslDrive - Linux パーティション マウンター (WSL2)";
+            ? s.TrayTooltipActive(activeMounts.Count)
+            : s.TrayTooltipIdle;
     }
 
     public void ShowBalloon(string title, string message, ToolTipIcon icon = ToolTipIcon.Info)

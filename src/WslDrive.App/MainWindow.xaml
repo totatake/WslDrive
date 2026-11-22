@@ -1,7 +1,8 @@
 <Window x:Class="WslDrive.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="WslDrive - Linux パーティション マウンター (WSL2)"
+        xmlns:loc="clr-namespace:WslDrive.App.Localization"
+        Title="WslDrive - Linux Partition Mounter (WSL2)"
         Height="760"
         Width="1120"
         MinHeight="600"
@@ -37,12 +38,17 @@
                             <TextBlock x:Name="ModeBadgeText" Text="Default: Read-Only (ro,noload)" Foreground="#CFE4FF" FontSize="11" FontWeight="SemiBold" />
                         </Border>
                     </StackPanel>
-                    <TextBlock Text="別ドライブの Linux パーティション (ext4 / btrfs / xfs) を Windows ドライブ (L: 等) として安全にマウント"
+                    <TextBlock x:Name="HeaderSubtitleText"
+                               Text="別ドライブの Linux パーティション (ext4 / btrfs / xfs) を Windows ドライブ (L: 等) として安全にマウント"
                                Foreground="#D0DCEB" FontSize="12" Margin="0,4,0,0" />
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="使用 WSL:" Foreground="#D0DCEB" VerticalAlignment="Center" FontSize="12" Margin="0,0,6,0" />
+                    <TextBlock x:Name="LanguageLabel" Text="言語:" Foreground="#D0DCEB" VerticalAlignment="Center" FontSize="12" Margin="0,0,6,0" />
+                    <ComboBox x:Name="LanguageComboBox" Width="92" VerticalAlignment="Center" Margin="0,0,12,0"
+                              DisplayMemberPath="Label" SelectedValuePath="Mode"
+                              SelectionChanged="LanguageComboBox_SelectionChanged" />
+                    <TextBlock x:Name="WslDistroLabel" Text="使用 WSL:" Foreground="#D0DCEB" VerticalAlignment="Center" FontSize="12" Margin="0,0,6,0" />
                     <ComboBox x:Name="DistroComboBox" Width="150" VerticalAlignment="Center" Margin="0,0,12,0"
                               SelectionChanged="DistroComboBox_SelectionChanged" />
                     <Border x:Name="AdminBadge" Background="#2E7D32" CornerRadius="4" Padding="10,5" VerticalAlignment="Center">
@@ -112,7 +118,7 @@
         </StackPanel>
 
         <!-- 4. Detected Disks & Partitions List -->
-        <GroupBox Grid.Row="3" Header="① 検出されたディスク ＆ Linux パーティション一覧"
+        <GroupBox x:Name="PartitionsGroupBox" Grid.Row="3" Header="① 検出されたディスク ＆ Linux パーティション一覧"
                   FontWeight="SemiBold" Padding="6" Margin="0,0,0,10" Background="White" BorderBrush="#D0D7DE">
             <DataGrid x:Name="PartitionsGrid"
                       FontWeight="Normal"
@@ -130,14 +136,14 @@
                       SelectionChanged="PartitionsGrid_SelectionChanged"
                       MouseDoubleClick="PartitionsGrid_MouseDoubleClick">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="ディスク" Binding="{Binding DiskDisplay}" Width="80" />
-                    <DataGridTextColumn Header="モデル名 / ソース" Binding="{Binding Model}" Width="220" />
-                    <DataGridTextColumn Header="番号" Binding="{Binding PartitionDisplay}" Width="60" />
-                    <DataGridTextColumn Header="FS種別" Binding="{Binding FileSystemDisplay}" Width="80" />
-                    <DataGridTextColumn Header="ラベル" Binding="{Binding LabelDisplay}" Width="140" />
-                    <DataGridTextColumn Header="サイズ" Binding="{Binding SizeDisplay}" Width="95" />
-                    <DataGridTextColumn Header="割当" Binding="{Binding MountedDriveDisplay}" Width="70" />
-                    <DataGridTextColumn Header="状態" Binding="{Binding StatusDisplay}" Width="*" />
+                    <DataGridTextColumn x:Name="ColDisk" Header="ディスク" Binding="{Binding DiskDisplay}" Width="80" />
+                    <DataGridTextColumn x:Name="ColModel" Header="モデル名 / ソース" Binding="{Binding Model}" Width="220" />
+                    <DataGridTextColumn x:Name="ColPartition" Header="番号" Binding="{Binding PartitionDisplay}" Width="60" />
+                    <DataGridTextColumn x:Name="ColFs" Header="FS種別" Binding="{Binding FileSystemDisplay}" Width="80" />
+                    <DataGridTextColumn x:Name="ColLabel" Header="ラベル" Binding="{Binding LabelDisplay}" Width="140" />
+                    <DataGridTextColumn x:Name="ColSize" Header="サイズ" Binding="{Binding SizeDisplay}" Width="95" />
+                    <DataGridTextColumn x:Name="ColDrive" Header="割当" Binding="{Binding MountedDriveDisplay}" Width="70" />
+                    <DataGridTextColumn x:Name="ColStatus" Header="状態" Binding="{Binding StatusDisplay}" Width="*" />
                 </DataGrid.Columns>
             </DataGrid>
         </GroupBox>
@@ -152,7 +158,7 @@
 
                 <WrapPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,2,16,2">
-                        <TextBlock Text="割当ドライブレター:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0" />
+                        <TextBlock x:Name="DriveLetterLabel" Text="割当ドライブレター:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0" />
                         <ComboBox x:Name="DriveLetterComboBox" Width="76" FontWeight="Bold" VerticalAlignment="Center" />
                     </StackPanel>
                     <CheckBox x:Name="ReadWriteCheckBox"
@@ -197,7 +203,7 @@
         </Border>
 
         <!-- 6. Active Mounts -->
-        <GroupBox Grid.Row="5" Header="② 現在マウント中の Linux ドライブ (WSL2 /mnt/wsl)"
+        <GroupBox x:Name="ActiveMountsGroupBox" Grid.Row="5" Header="② 現在マウント中の Linux ドライブ (WSL2 /mnt/wsl)"
                   FontWeight="SemiBold" Padding="6" Margin="0,0,0,8" Background="White" BorderBrush="#D0D7DE">
             <DataGrid x:Name="ActiveMountsGrid"
                       FontWeight="Normal"
@@ -214,18 +220,18 @@
                       BorderThickness="0"
                       MouseDoubleClick="ActiveMountsGrid_MouseDoubleClick">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="ドライブ" Binding="{Binding MappedDriveLetter}" Width="75" FontWeight="Bold" />
-                    <DataGridTextColumn Header="モード" Binding="{Binding AccessModeDisplay}" Width="60" FontWeight="Bold" />
-                    <DataGridTextColumn Header="マウント名" Binding="{Binding MountName}" Width="150" />
-                    <DataGridTextColumn Header="FS" Binding="{Binding FileSystemType}" Width="75" />
-                    <DataGridTextColumn Header="WSL デバイス" Binding="{Binding SourceDeviceInWsl}" Width="110" />
-                    <DataGridTextColumn Header="オプション" Binding="{Binding MountOptions}" Width="150" />
-                    <DataGridTextColumn Header="UNC パス" Binding="{Binding UncPath}" Width="*" />
-                    <DataGridTemplateColumn Header="操作" Width="180">
+                    <DataGridTextColumn x:Name="ColActiveDrive" Header="ドライブ" Binding="{Binding MappedDriveLetter}" Width="75" FontWeight="Bold" />
+                    <DataGridTextColumn x:Name="ColActiveMode" Header="モード" Binding="{Binding AccessModeDisplay}" Width="60" FontWeight="Bold" />
+                    <DataGridTextColumn x:Name="ColActiveMountName" Header="マウント名" Binding="{Binding MountName}" Width="150" />
+                    <DataGridTextColumn x:Name="ColActiveFs" Header="FS" Binding="{Binding FileSystemType}" Width="75" />
+                    <DataGridTextColumn x:Name="ColActiveDevice" Header="WSL デバイス" Binding="{Binding SourceDeviceInWsl}" Width="110" />
+                    <DataGridTextColumn x:Name="ColActiveOptions" Header="オプション" Binding="{Binding MountOptions}" Width="150" />
+                    <DataGridTextColumn x:Name="ColActiveUnc" Header="UNC パス" Binding="{Binding UncPath}" Width="*" />
+                    <DataGridTemplateColumn x:Name="ColActiveActions" Header="操作" Width="180">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
-                                    <Button Content="📂 開く"
+                                    <Button Content="{Binding Source={x:Static loc:AppStrings.Instance}, Path=ActiveRowOpenButton, Mode=OneWay}"
                                             Background="#2E7D32"
                                             Foreground="White"
                                             FontWeight="SemiBold"
@@ -234,7 +240,7 @@
                                             Margin="0,0,6,0"
                                             Cursor="Hand"
                                             Click="ActiveRowOpenButton_Click" />
-                                    <Button Content="⏏ 解除"
+                                    <Button Content="{Binding Source={x:Static loc:AppStrings.Instance}, Path=ActiveRowUnmountButton, Mode=OneWay}"
                                             Background="#DC3545"
                                             Foreground="White"
                                             FontWeight="SemiBold"
@@ -251,7 +257,7 @@
         </GroupBox>
 
         <!-- 7. Collapsible Activity Log -->
-        <Expander Grid.Row="6" Header="実行ログ・詳細メッセージ" IsExpanded="True" Background="White" BorderBrush="#D0D7DE" BorderThickness="1" Padding="4">
+        <Expander x:Name="LogExpander" Grid.Row="6" Header="実行ログ・詳細メッセージ" IsExpanded="True" Background="White" BorderBrush="#D0D7DE" BorderThickness="1" Padding="4">
             <Grid Height="95">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
@@ -266,8 +272,8 @@
                          BorderThickness="0"
                          TextWrapping="NoWrap" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,18,0">
-                    <Button Content="ログをコピー" Padding="8,2" FontSize="11" Margin="0,0,6,0" Click="CopyLogButton_Click" />
-                    <Button Content="クリア" Padding="8,2" FontSize="11" Click="ClearLogButton_Click" />
+                    <Button x:Name="CopyLogButton" Content="ログをコピー" Padding="8,2" FontSize="11" Margin="0,0,6,0" Click="CopyLogButton_Click" />
+                    <Button x:Name="ClearLogButton" Content="クリア" Padding="8,2" FontSize="11" Click="ClearLogButton_Click" />
                 </StackPanel>
             </Grid>
         </Expander>
