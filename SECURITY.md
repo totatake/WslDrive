@@ -15,6 +15,7 @@
 - **Token Impersonation**: `DriveMapper` duplicates the desktop shell's (`explorer.exe`) non-elevated token solely for calling `DefineDosDeviceW` in the interactive user's `\DosDevices` namespace and immediately calls `RevertToSelf()`.
 - **Safe-by-Default Mounts**: Mounts default to `ro,noload` (or `ro`) to prevent journal replay and accidental writes. Read-Write (`--rw` / GUI toggle) requires explicit user opt-in and is **blocked** on the Windows-shared NBD bridge path.
 - **NBD Bridge Isolation**: `AlignedDiskStream` opens physical disks with `GENERIC_READ` only and restricts reads to the target partition byte range; `ReadOnlyNbdServer` rejects all write requests with `EROFS (30)`.
+- **WSL Argument & Filesystem Validation**: `WslMountService` validates `FileSystemType` strictly (`[A-Za-z0-9][A-Za-z0-9._-]{0,31}`) and passes Linux `mount` arguments directly via `ProcessStartInfo.ArgumentList` without invoking `sh -c`, preventing shell command injection.
 
 ## Reporting a Vulnerability
 

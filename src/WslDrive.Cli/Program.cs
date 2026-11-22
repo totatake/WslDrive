@@ -142,6 +142,10 @@ internal static class Program
                 case "--type":
                 case "-t":
                     fsType = RequireArgValue(args, ref i, "--fs");
+                    if (!WslMountService.IsValidFileSystemType(fsType))
+                    {
+                        throw new ArgumentException($"Invalid filesystem type '{fsType}'.");
+                    }
                     break;
                 case "--rw":
                 case "--read-write":

@@ -25,5 +25,5 @@
 ## 4. 結果と影響 (Consequences)
 
 - **良い影響**: デュアルブート機の `Disk 0` 等にある Linux パーティションも追加ドライバや `apt` なしで安全に読み取れるようになった。
-- **受け入れるトレードオフ / 今後の制約**: 対象 WSL ディストリビューションに `python3` が存在すること、およびカーネルに `nbd` モジュールが含まれることが前提となる。また NBD ブリッジ経路では安全性のため RW マウント不可。
+- **受け入れるトレードオフ / 今後の制約**: 対象 WSL ディストリビューションに `python3` が存在すること、およびカーネルに `nbd` モジュールが含まれることが前提となる。また NBD ブリッジ経路では安全性のため RW マウント不可。さらに、WSL 側で `mount` 等を実行する際はコマンドインジェクション防止のため `sh -c` 文字列組み立てを禁止し、`FileSystemType` の厳格な検証と直接引数配列での実行を必須とする。
 - **関連する変更箇所**: [AlignedDiskStream.cs](../../src/WslDrive.Core/Disk/AlignedDiskStream.cs), [NbdDiskBridge.cs](../../src/WslDrive.Core/Wsl/NbdDiskBridge.cs), [WslMountService.cs](../../src/WslDrive.Core/Wsl/WslMountService.cs), [Program.cs](../../src/WslDrive.Cli/Program.cs)

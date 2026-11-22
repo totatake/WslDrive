@@ -27,6 +27,13 @@ public sealed partial class WslMountService
     [GeneratedRegex(@"[\\/]+mnt[\\/]+wsl[\\/]+(?<name>[^\\/]+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex UncMountNameRegex();
 
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$", RegexOptions.CultureInvariant)]
+    private static partial Regex ValidFileSystemTypeRegex();
+
+    public static bool IsValidFileSystemType(string? fsType) =>
+        !string.IsNullOrWhiteSpace(fsType) &&
+        ValidFileSystemTypeRegex().IsMatch(fsType.Trim());
+
     public WslMountService() : this(new WslCliRunner())
     {
     }
@@ -138,8 +145,12 @@ public sealed partial class WslMountService
 
         if (!string.IsNullOrWhiteSpace(request.FileSystemType))
         {
+            if (!IsValidFileSystemType(request.FileSystemType))
+            {
+                throw new ArgumentException($"Invalid filesystem type '{request.FileSystemType}'.", nameof(request));
+            }
             args.Add("--type");
-            args.Add(request.FileSystemType);
+            args.Add(request.FileSystemType.Trim());
         }
 
         bool useNoLoad = !request.ReadWrite &&
@@ -166,6 +177,11 @@ public sealed partial class WslMountService
         if (driveLetter is < 'A' or > 'Z')
         {
             return new MountOperationResult(false, null, $"Invalid drive letter '{request.DriveLetter}'.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.FileSystemType) && !IsValidFileSystemType(request.FileSystemType))
+        {
+            return new MountOperationResult(false, null, $"Invalid filesystem type '{request.FileSystemType}'.");
         }
 
         string? distro = !string.IsNullOrWhiteSpace(request.DistroName)
@@ -447,20 +463,26 @@ public sealed partial class WslMountService
                           fsType.Equals("ext4", StringComparison.OrdinalIgnoreCase) ||
                           fsType.Equals("ext3", StringComparison.OrdinalIgnoreCase));
         string usedOptions = useNoLoad ? "ro,noload" : "ro";
-        string fsTypeArg = !string.IsNullOrWhiteSpace(fsType) ? $"-t {fsType} " : string.Empty;
 
-        string mountCmd = $"mkdir -p '{wslMountPoint}' && mount {fsTypeArg}-o {usedOptions} '{attach.NbdDevicePath}' '{wslMountPoint}'";
-        log?.Invoke($"Mounting NBD device inside WSL2: mount {fsTypeArg}-o {usedOptions} {attach.NbdDevicePath} {wslMountPoint}");
-        WslCommandResult mountRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", mountCmd], cancellationToken)
-            .ConfigureAwait(false);
+        WslCommandResult mountRes = await _runner.RunAsync(
+            ["-d", distro, "-u", "root", "--", "mkdir", "-p", wslMountPoint],
+            cancellationToken).ConfigureAwait(false);
 
-        if (mountRes.ExitCode != 0 && usedOptions == "ro,noload")
+        if (mountRes.ExitCode == 0)
         {
-            log?.Invoke($"NBD mount with `ro,noload` failed ({CombineOutput(mountRes)}); retrying with `ro`...");
-            usedOptions = "ro";
-            string fallbackCmd = $"mkdir -p '{wslMountPoint}' && mount {fsTypeArg}-o ro '{attach.NbdDevicePath}' '{wslMountPoint}'";
-            mountRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", fallbackCmd], cancellationToken)
-                .ConfigureAwait(false);
+            log?.Invoke($"Mounting NBD device inside WSL2: mount {(string.IsNullOrWhiteSpace(fsType) ? "" : $"-t {fsType.Trim()} ")}-o {usedOptions} {attach.NbdDevicePath} {wslMountPoint}");
+            mountRes = await _runner.RunAsync(
+                BuildLinuxMountArgs(distro, fsType, usedOptions, attach.NbdDevicePath, wslMountPoint),
+                cancellationToken).ConfigureAwait(false);
+
+            if (mountRes.ExitCode != 0 && usedOptions == "ro,noload")
+            {
+                log?.Invoke($"NBD mount with `ro,noload` failed ({CombineOutput(mountRes)}); retrying with `ro`...");
+                usedOptions = "ro";
+                mountRes = await _runner.RunAsync(
+                    BuildLinuxMountArgs(distro, fsType, "ro", attach.NbdDevicePath, wslMountPoint),
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (mountRes.ExitCode != 0)
@@ -545,6 +567,30 @@ public sealed partial class WslMountService
         return uncPath;
     }
 
+    private static List<string> BuildLinuxMountArgs(
+        string distro,
+        string? fsType,
+        string options,
+        string devicePath,
+        string mountPoint)
+    {
+        var args = new List<string> { "-d", distro, "-u", "root", "--", "mount" };
+        if (!string.IsNullOrWhiteSpace(fsType))
+        {
+            if (!IsValidFileSystemType(fsType))
+            {
+                throw new ArgumentException($"Invalid filesystem type '{fsType}'.", nameof(fsType));
+            }
+            args.Add("-t");
+            args.Add(fsType.Trim());
+        }
+        args.Add("-o");
+        args.Add(options);
+        args.Add(devicePath);
+        args.Add(mountPoint);
+        return args;
+    }
+
     private async Task<(bool Success, string UsedOptions)> TryMountSiblingPartitionInWslAsync(
         MountRequest request,
         string distro,
@@ -558,14 +604,29 @@ public sealed partial class WslMountService
         string partDev = request.PartitionNumber is > 0
             ? GetPartitionDeviceFromBase(baseDev, request.PartitionNumber.Value)
             : baseDev;
-        string fsTypeArg = !string.IsNullOrWhiteSpace(request.FileSystemType)
-            ? $"-t {request.FileSystemType} "
-            : string.Empty;
         string wslMountPoint = $"/mnt/wsl/{mountName}";
 
         log?.Invoke($"Disk already has active sibling mount ({siblingSourceDevice}); mounting {partDev} at {wslMountPoint} ({preferredOptions})...");
-        string mountCmd = $"mkdir -p '{wslMountPoint}' && (mountpoint -q '{wslMountPoint}' || mount {fsTypeArg}-o {preferredOptions} '{partDev}' '{wslMountPoint}')";
-        var mountRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", mountCmd], cancellationToken).ConfigureAwait(false);
+        var mkdirRes = await _runner.RunAsync(
+            ["-d", distro, "-u", "root", "--", "mkdir", "-p", wslMountPoint],
+            cancellationToken).ConfigureAwait(false);
+        if (mkdirRes.ExitCode != 0)
+        {
+            log?.Invoke($"Failed to create mount point {wslMountPoint}: {CombineOutput(mkdirRes)}");
+            return (false, preferredOptions);
+        }
+
+        var checkMountedRes = await _runner.RunAsync(
+            ["-d", distro, "-u", "root", "--", "mountpoint", "-q", wslMountPoint],
+            cancellationToken).ConfigureAwait(false);
+        if (checkMountedRes.ExitCode == 0)
+        {
+            return (true, preferredOptions);
+        }
+
+        var mountRes = await _runner.RunAsync(
+            BuildLinuxMountArgs(distro, request.FileSystemType, preferredOptions, partDev, wslMountPoint),
+            cancellationToken).ConfigureAwait(false);
         if (mountRes.ExitCode == 0)
         {
             return (true, preferredOptions);
@@ -574,8 +635,9 @@ public sealed partial class WslMountService
         if (preferredOptions == "ro,noload")
         {
             log?.Invoke($"Sibling mount with `ro,noload` failed ({CombineOutput(mountRes)}); retrying with `ro`...");
-            string fallbackCmd = $"mkdir -p '{wslMountPoint}' && (mountpoint -q '{wslMountPoint}' || mount {fsTypeArg}-o ro '{partDev}' '{wslMountPoint}')";
-            var fallbackRes = await _runner.RunAsync(["-d", distro, "-u", "root", "--", "sh", "-c", fallbackCmd], cancellationToken).ConfigureAwait(false);
+            var fallbackRes = await _runner.RunAsync(
+                BuildLinuxMountArgs(distro, request.FileSystemType, "ro", partDev, wslMountPoint),
+                cancellationToken).ConfigureAwait(false);
             if (fallbackRes.ExitCode == 0)
             {
                 return (true, "ro");

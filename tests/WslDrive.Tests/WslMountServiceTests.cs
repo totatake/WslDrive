@@ -235,8 +235,9 @@ public sealed class WslMountServiceTests
         Assert.True(result.Success);
         Assert.Equal("ro,noload", result.Session?.MountOptions);
         Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("--unmount"));
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("sh -c"));
         Assert.Contains(runner.RecordedCalls, c =>
-            c.Contains("'/dev/sdc1'") && c.Contains("'/mnt/wsl/wsldrive_d2p1'"));
+            c.Contains("-- mount") && c.Contains("/dev/sdc1") && c.Contains("/mnt/wsl/wsldrive_d2p1"));
     }
 
     [Fact]
@@ -325,7 +326,9 @@ public sealed class WslMountServiceTests
         Assert.Equal("/dev/nbd0", result.Session?.SourceDeviceInWsl);
         Assert.Equal("ro,noload", result.Session?.MountOptions);
         Assert.Equal(1, nbdProvider.AttachCallCount);
-        Assert.Contains(runner.RecordedCalls, c => c.Contains("'/dev/nbd0'") && c.Contains("'/mnt/wsl/wsldrive_d0p3'"));
+        Assert.DoesNotContain(runner.RecordedCalls, c => c.Contains("sh -c"));
+        Assert.Contains(runner.RecordedCalls, c =>
+            c.Contains("-- mount") && c.Contains("/dev/nbd0") && c.Contains("/mnt/wsl/wsldrive_d0p3"));
     }
 
     [Fact]
@@ -463,8 +466,34 @@ public sealed class WslMountServiceTests
         Assert.Equal(2, sessions.Count);
         Assert.True(sessions[0].IsReadOnly);
         Assert.Equal("RO", sessions[0].AccessModeDisplay);
-        Assert.False(sessions[1].IsReadOnly);
+        Assert.True(sessions[1].IsReadOnly == false);
         Assert.Equal("RW", sessions[1].AccessModeDisplay);
+    }
+
+    [Theory]
+    [InlineData("ext4;id>/tmp/pwned;#")]
+    [InlineData("-o rw")]
+    [InlineData("ext4 && rm -rf /")]
+    public async Task MountAsync_RejectsUnsafeFileSystemType(string unsafeFsType)
+    {
+        var runner = new FakeWslRunner();
+        var service = new WslMountService(runner);
+
+        var req = new MountRequest
+        {
+            DiskIndex = 1,
+            PartitionNumber = 1,
+            DriveLetter = 'L',
+            FileSystemType = unsafeFsType,
+            DistroName = "Ubuntu"
+        };
+
+        MountOperationResult result = await service.MountAsync(req);
+
+        Assert.False(result.Success);
+        Assert.Contains("Invalid filesystem type", result.Message);
+        Assert.Empty(runner.RecordedCalls);
+        Assert.Throws<ArgumentException>(() => WslMountService.BuildMountArguments(req));
     }
 
     private sealed class FakeNbdBridgeProvider(string nbdDevicePath) : INbdBridgeProvider
@@ -522,6 +551,11 @@ public sealed class WslMountServiceTests
             if (arguments.Contains("/proc/mounts"))
             {
                 return Task.FromResult(new WslCommandResult(0, procMountsOutput, string.Empty));
+            }
+
+            if (arguments.Contains("mountpoint"))
+            {
+                return Task.FromResult(new WslCommandResult(1, string.Empty, string.Empty));
             }
 
             if (failMountWithAlreadyMounted && arguments.Contains("--mount"))
