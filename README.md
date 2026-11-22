@@ -25,7 +25,7 @@ No third-party kernel filesystem drivers (Dokan, WinFsp, etc.) are required. It 
 
 ### Build & Test
 
-Requires Windows 11 and the .NET 8.0 SDK (`net8.0-windows`):
+Requires Windows 11, WSL2, and [.NET 8.0 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0) (`winget install Microsoft.DotNet.DesktopRuntime.8`) for pre-built releases, or the .NET 8.0 SDK (`net8.0-windows`) to build from source:
 
 ```powershell
 dotnet build WslDrive.sln -c Release

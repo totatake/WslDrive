@@ -27,12 +27,12 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     if ($Publish) {
-        Write-Host "==> Publishing WslDrive.App (win-x64 self-contained)..." -ForegroundColor Cyan
-        dotnet publish src/WslDrive.App/WslDrive.App.csproj -c $Configuration -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/App
+        Write-Host "==> Publishing WslDrive.App (win-x64 framework-dependent)..." -ForegroundColor Cyan
+        dotnet publish src/WslDrive.App/WslDrive.App.csproj -c $Configuration -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/App
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-        Write-Host "==> Publishing WslDrive.Cli (win-x64 self-contained)..." -ForegroundColor Cyan
-        dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c $Configuration -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Cli
+        Write-Host "==> Publishing WslDrive.Cli (win-x64 framework-dependent)..." -ForegroundColor Cyan
+        dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c $Configuration -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/Cli
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 

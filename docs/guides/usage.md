@@ -10,6 +10,7 @@
   wsl --status
   wsl --list --verbose
   ```
+- **ランタイム**（ビルド済みバイナリを実行する場合）: [.NET 8.0 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0)（例: `winget install Microsoft.DotNet.DesktopRuntime.8`）
 - **ビルド環境**（ソースからビルドする場合）: .NET 8.0 SDK (`net8.0-windows`) または Visual Studio 2022
 
 ## 2. ビルド ＆ 発行 (Publish) 方法
@@ -23,11 +24,11 @@ dotnet build WslDrive.sln -c Release
 # 単体テストの実行
 dotnet test WslDrive.sln -c Release
 
-# 単一実行ファイル（Self-Contained）として出力する例（GUI アプリ）
-dotnet publish src/WslDrive.App/WslDrive.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/App
+# 軽量な Framework-Dependent 単一実行ファイルとして出力する例（GUI アプリ）
+dotnet publish src/WslDrive.App/WslDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/App
 
 # CLI ツールの出力例
-dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Cli
+dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/Cli
 ```
 
 または同梱のヘルパースクリプトを使用できます：

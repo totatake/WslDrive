@@ -25,7 +25,7 @@
 
 ### ビルドとテスト
 
-Windows 11 および .NET 8.0 SDK（`net8.0-windows`）環境で実行します：
+ビルド済みバイナリの実行には Windows 11、WSL2、および [.NET 8.0 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0)（`winget install Microsoft.DotNet.DesktopRuntime.8`）が必要です。ソースからビルドする場合は .NET 8.0 SDK（`net8.0-windows`）を使用します：
 
 ```powershell
 dotnet build WslDrive.sln -c Release
