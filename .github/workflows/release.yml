@@ -40,19 +40,21 @@ jobs:
       - name: Publish framework-dependent binaries (win-x64)
         shell: pwsh
         run: |
-          dotnet publish src/WslMountDrive.App/WslMountDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/WslMountDrive-win-x64
-          dotnet publish src/WslMountDrive.Cli/WslMountDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/WslMountDrive-win-x64
-          Copy-Item LICENSE publish/WslMountDrive-win-x64/LICENSE
-          Copy-Item README.md publish/WslMountDrive-win-x64/README.md
-          Copy-Item README.ja.md publish/WslMountDrive-win-x64/README.ja.md
-          Compress-Archive -Path publish/WslMountDrive-win-x64/* -DestinationPath publish/WslMountDrive-win-x64.zip
-          $hash = (Get-FileHash publish/WslMountDrive-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  WslMountDrive-win-x64.zip" | Set-Content -Encoding ascii publish/SHA256SUMS.txt
+          $pkgName = "WslMountDrive-${{ github.ref_name }}-win-x64"
+          $zipName = "$pkgName.zip"
+          dotnet publish src/WslMountDrive.App/WslMountDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o "publish/$pkgName"
+          dotnet publish src/WslMountDrive.Cli/WslMountDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o "publish/$pkgName"
+          Copy-Item LICENSE "publish/$pkgName/LICENSE"
+          Copy-Item README.md "publish/$pkgName/README.md"
+          Copy-Item README.ja.md "publish/$pkgName/README.ja.md"
+          Compress-Archive -Path "publish/$pkgName/*" -DestinationPath "publish/$zipName"
+          $hash = (Get-FileHash "publish/$zipName" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zipName" | Set-Content -Encoding ascii publish/SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            publish/WslMountDrive-win-x64.zip
+            publish/WslMountDrive-${{ github.ref_name }}-win-x64.zip
             publish/SHA256SUMS.txt
           generate_release_notes: true
