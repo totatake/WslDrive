@@ -1,46 +1,91 @@
 # WslDrive
 
-Windows 11上で、別ドライブにあるLinuxパーティション（`ext4` / `btrfs` / `xfs` 等）を安全にマウントし、エクスプローラーから通常のドライブレター（`L:\` 等）として透過的にアクセスできるC#ユーティリティです。デフォルトは安全な **Read-Only（読み取り専用）** でマウントし、オプション指定（CLI `--rw` / GUI チェックボックス）により **Read-Write（読み書き可能）** でのマウントにも対応します。
+> **Mount Linux partitions (`ext4` / `btrfs` / `xfs`) on Windows 11 as native drive letters via WSL2 — safe Read-Only (`ro,noload`) by default, with optional Read-Write (`--rw`) support.**
 
-サードパーティ製カーネルドライバ（Dokan / WinFsp等）のインストールは不要で、Windows 11標準の **WSL2 (`wsl --mount`)** と **非昇格ユーザートークンによるドライブマッピング** を組み合わせて動作します。
+**Language:** English | [日本語](README.ja.md)
 
-## 主な特徴
+---
 
-- **ドライバ導入不要 ＆ 100% カーネル互換性**: WSL2のLinuxカーネル純正ドライバを用いるため、`ext4` だけでなく `btrfs` / `xfs` などもネイティブ互換性でアクセス可能。
-- **デフォルト Read-Only 保護 (`ro,noload`) ＆ オプション RW 対応**: 標準では ext4 のジャーナル再生すら行わない `ro,noload` オプションを適用し、接続したLinuxディスクへの意図しない書き込みを防止します。必要に応じて `--rw`（GUIではチェックボックス）で Read-Write (`rw`) マウントに切り替えられます（Windows 使用中ディスク向けの NBD ブリッジは安全のため Read-Only 専用）。
-- **マウント前のスーパーブロック事前解析**: 物理ドライブ（`\\.\PhysicalDriveX`）やイメージファイルのGPT/MBRおよび各パーティションのスーパーブロック（Magic・ラベル・UUID）を直接読み取り、マウント前からどのパーティションがLinuxデータか分かりやすく一覧表示します。
-- **Plan 9 制限および UAC セッション分離を自動回避**: `net use`（`p9np.dll`）では拒否されるサブディレクトリ UNC パス（`\\wsl.localhost\<Distro>\mnt\wsl\...`）に対し、NT オブジェクトマネージャの DOS デバイスシンボリックリンク（`DefineDosDeviceW`）と `explorer.exe` 非昇格トークン偽装（`ImpersonateLoggedOnUser`）を組み合わせて割り当てるため、**特別なレジストリ変更なしに通常ユーザーのエクスプローラーと管理者ターミナルの双方へ `L:` ドライブが即座に表示**されます。
-- **CLI ＆ WPF GUI（タスクトレイ常駐対応）** の両方を提供。
+## Overview
 
-## クイックスタート
+`WslDrive` is a C# utility (CLI and WPF GUI with system tray integration) for Windows 11 that mounts Linux partitions on separate physical disks, `.vhdx` virtual disks, or Windows-shared physical disks via WSL2 and exposes them as ordinary Windows drive letters (such as `L:\`) in File Explorer and elevated terminals.
 
-### ビルドとテスト（Windows 11 / .NET 8 SDK）
+No third-party kernel filesystem drivers (Dokan, WinFsp, etc.) are required. It uses Windows 11's built-in WSL2 Linux kernel drivers combined with NT DOS device mapping (`DefineDosDeviceW`) and non-elevated desktop token impersonation (`explorer.exe`).
+
+## Key Features
+
+- **Zero Third-Party Kernel Drivers & Full Linux FS Compatibility**: Uses the genuine WSL2 Linux kernel (`ext4`, `btrfs`, `xfs`, etc.) without installing custom kernel drivers.
+- **Safe by Default (`ro,noload`) with Optional Read-Write (`--rw`)**: Defaults to `ro,noload` (skipping journal replay on `ext3`/`ext4` to prevent accidental writes); users can explicitly enable Read-Write (`rw`) via `--rw` in CLI or the RW checkbox in GUI.
+- **Pre-Mount Superblock Inspection**: Reads GPT/MBR/EBR partition tables and Linux superblocks (`ext2/3/4`, `btrfs`, `xfs`, `swap`, `LUKS`) directly using read-only handles to show filesystem types, labels, and UUIDs before mounting.
+- **Automatic Plan 9 & UAC Session Bypass**: Maps `/mnt/wsl/<name>` subdirectories directly using `DefineDosDeviceW` and `explorer.exe` token impersonation so drives appear in both standard File Explorer and elevated terminals without modifying `EnableLinkedConnections`.
+- **Hybrid Read-Only NBD Bridge for Windows-Shared Disks**: Automatically falls back to an in-kernel WSL2 `/dev/nbdX` bridge when a physical disk contains active Windows volumes (which `wsl --mount` rejects with `ERROR_SHARING_VIOLATION`); strictly Read-Only for data safety.
+- **Multi-Partition Lifecycle Control**: Supports mounting multiple partitions from the same physical disk/VHDX concurrently and unmounting individual partitions without detaching active siblings.
+
+## Quick Start
+
+### Build & Test
+
+Requires Windows 11 and the .NET 8.0 SDK (`net8.0-windows`):
+
 ```powershell
 dotnet build WslDrive.sln -c Release
 dotnet test WslDrive.sln -c Release
 ```
 
-### CLIでの利用例（管理者ターミナルで実行）
+Or run the helper script:
+
 ```powershell
-# 物理ディスクのLinuxパーティション一覧を表示
+.\scripts\build-and-test.ps1
+```
+
+### CLI Usage
+
+Run from an Administrator terminal:
+
+```powershell
+# List physical disks and detected Linux partitions
 WslDrive.Cli.exe list
 
-# PhysicalDrive1 の Partition 2 を L: ドライブとして RO マウント（デフォルト）
+# Mount PhysicalDrive1 Partition 2 to L: (Read-Only by default: ro,noload)
 WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
 
-# PhysicalDrive1 の Partition 2 を L: ドライブとして RW（読み書き可能）マウント
+# Mount as Read-Write (rw)
 WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
 
-# マウント状態確認
+# Check active WSL2 mounts and mapped drive letters
 WslDrive.Cli.exe status
 
-# アンマウント ＆ ドライブ解除
+# Unmount and remove drive mapping
 WslDrive.Cli.exe unmount --letter L:
 ```
 
-## ドキュメント
+### GUI Usage
 
-詳細な設計背景、4つのWindows/WSL2固有課題と設計判断記録（ADR）、ビルド・単体テスト・結合テスト手順については `docs/` 配下をご参照ください。
+1. Launch `WslDrive.App.exe` (requests UAC elevation via `app.manifest`, or use **Relaunch as Administrator** inside the window).
+2. Select a detected Linux partition (or drag & drop a `.vhdx` / `.vhd` / `.img` file), choose a drive letter, and click **Mount**.
+3. Optionally check **読み書き可能 (RW) でマウント** before mounting when Read-Write access is needed (disabled for Windows-shared NBD bridge disks).
+4. Manage active drives from the bottom list or the system tray icon.
 
-- [アーキテクチャ設計・開発計画書 (`docs/architecture_and_plan.md`)](docs/architecture_and_plan.md)
-- [ビルド・利用・テストガイド (`docs/testing_and_usage_guide.md`)](docs/testing_and_usage_guide.md)
+## Documentation
+
+Detailed engineering documentation (written primarily in Japanese) lives under [`docs/`](docs/README.md):
+
+- [Documentation Hub (`docs/README.md`)](docs/README.md)
+- [Overview & Tool Comparison (`docs/overview.md`)](docs/overview.md)
+- [Requirements Specification (`docs/requirements.md`)](docs/requirements.md)
+- [System Architecture (`docs/architecture.md`)](docs/architecture.md)
+- [User & CLI Guide (`docs/guides/usage.md`)](docs/guides/usage.md)
+- [Troubleshooting (`docs/guides/troubleshooting.md`)](docs/guides/troubleshooting.md)
+- [Architecture Decision Records (`docs/adr/README.md`)](docs/adr/README.md)
+- [Testing & Verification (`docs/testing.md`)](docs/testing.md)
+- [Roadmap (`docs/roadmap.md`)](docs/roadmap.md)
+
+## Contributing & Security
+
+- Build setup, coding workflow, and PR checklist: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Vulnerability reporting policy and privilege boundaries: [SECURITY.md](SECURITY.md)
+- Release and change history: [CHANGELOG.md](CHANGELOG.md)
+
+## License
+
+Licensed under the **MIT License**. See [LICENSE](LICENSE) for full details.

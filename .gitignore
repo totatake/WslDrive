@@ -45,3 +45,6 @@ $RECYCLE.BIN/
 *.tmp
 *.bak
 *.swp
+
+# Publish output
+publish/
