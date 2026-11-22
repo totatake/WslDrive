@@ -810,6 +810,15 @@ public partial class MainWindow : Window
         base.OnClosing(e);
     }
 
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        if (!_allowExit)
+        {
+            System.Windows.Application.Current.Shutdown();
+        }
+    }
+
     private void RestoreFromTray()
     {
         Show();
