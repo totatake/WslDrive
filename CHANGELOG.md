@@ -1,11 +1,14 @@
 # Changelog
 
-All notable changes to **WslDrive** will be documented in this file.
+All notable changes to **WslMountDrive** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+- Renamed project, solution/csproj files, namespaces, WSL mount prefix (`wslmountdrive_`), and NBD bridge handshake tokens (`WSLMOUNTDRIVE_NBD_*`) from `WslDrive` to `WslMountDrive` to avoid naming collision with `zcsizmadia/wsldrive`.
 
 ## [0.2.0] - 2026-11-22
 

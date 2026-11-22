@@ -1,6 +1,6 @@
-# 要件定義書 (`WslDrive`)
+# 要件定義書 (`WslMountDrive`)
 
-本ドキュメントでは、**WslDrive** が満たすべき機能要件および非機能要件を定義します。各要件 ID は [testing.md](testing.md) のテスト仕様およびトレーサビリティ表と対応付けます。
+本ドキュメントでは、**WslMountDrive** が満たすべき機能要件および非機能要件を定義します。各要件 ID は [testing.md](testing.md) のテスト仕様およびトレーサビリティ表と対応付けます。
 
 ## 1. 機能要件 (Functional Requirements)
 
@@ -10,7 +10,7 @@
 | `REQ-F-002` | RO/RW マウント ＆ ドライブレター割当 | 指定パーティションまたは `.vhdx` を `wsl --mount` で `/mnt/wsl/<MountName>` にマウントし（既定 `ro,noload` / 任意 `rw`）、指定ドライブレターへ `DefineDosDeviceW` で割り当ててエクスプローラーと管理者ターミナル双方からアクセス可能にすること。 | Must | Implemented |
 | `REQ-F-003` | 安全なアンマウント ＆ マルチパーティション制御 | ドライブレター解除、個別 `umount`、および `wsl --unmount` を整合ある順序で実行し、同一ディスク上の他パーティションが残存する場合は個別解除・最後の1件または全体指定時はディスク切り離しを行うこと。 | Must | Implemented |
 | `REQ-F-004` | Windows 同居ディスク向け Read-Only NBD ブリッジ | Windows ボリュームと同居する物理ディスク（`HasWindowsMountedVolumes` / `ERROR_SHARING_VIOLATION`）に対し、`AlignedDiskStream` ＋ WSL2 `/dev/nbdX` 経由で Read-Only マウントでき、NBD 経路での RW 要求は拒否すること。 | Must | Implemented |
-| `REQ-F-005` | CLI ＆ WPF GUI ハイブリッド提供 | `WslDrive.Core` を共有し、`WslDrive.Cli`（`list` / `mount` / `unmount` / `status`）と `WslDrive.App`（WPF ウィンドウ＋タスクトレイ常駐＋RO/RW 切替 UI）を提供すること。 | Must | Implemented |
+| `REQ-F-005` | CLI ＆ WPF GUI ハイブリッド提供 | `WslMountDrive.Core` を共有し、`WslMountDrive.Cli`（`list` / `mount` / `unmount` / `status`）と `WslMountDrive.App`（WPF ウィンドウ＋タスクトレイ常駐＋RO/RW 切替 UI）を提供すること。 | Must | Implemented |
 
 ### 詳細仕様
 
@@ -31,7 +31,7 @@
 - **入力**: `DriveLetter`、`DiskIndex`、`VhdPath`、`MountName`、`ForceWholeDisk` のいずれかまたは組み合わせ。
 - **処理 / 契約**:
   - 同一物理ディスク・ベースデバイスに他パーティションが残存し個別アンマウントの場合のみ、ドライブ解除＋対象マウントポイントの `umount` を行いディスクを保持する。
-  - 最後の 1 件またはディスク全体解除時は、先行 `umount` を行わずに `wsl --unmount <target>` を実行し、失敗時は `/mnt/wsl/wsldrive_*` の自己バインドマウント補完後にリトライする。
+  - 最後の 1 件またはディスク全体解除時は、先行 `umount` を行わずに `wsl --unmount <target>` を実行し、失敗時は `/mnt/wsl/wslmountdrive_*` の自己バインドマウント補完後にリトライする。
 - **出力 / エラー条件**: `UnmountOperationResult`。
 
 #### `REQ-F-004`: Windows 同居ディスク向け Read-Only NBD ブリッジ (`ReadOnlyNbdServer` / `NbdDiskBridge`)
@@ -39,7 +39,7 @@
 - **処理 / 契約**: `GENERIC_READ` のみの `AlignedDiskStream` で対象パーティション範囲に限定し、WSL2 内の `modprobe nbd` + `python3` ioctl（`NBD_FLAG_READ_ONLY`）で `/dev/nbdX` を構成する。`NBD_CMD_WRITE` / `NBD_CMD_WRITE_ZEROES` は `EROFS (30)` で拒否する。
 - **出力 / エラー条件**: `ReadWrite == true` 要求時は即座に失敗レスポンスを返す。
 
-#### `REQ-F-005`: CLI ＆ WPF GUI ハイブリッド提供 (`WslDrive.Cli` / `WslDrive.App`)
+#### `REQ-F-005`: CLI ＆ WPF GUI ハイブリッド提供 (`WslMountDrive.Cli` / `WslMountDrive.App`)
 - **入力**: CLI 引数（`--rw` / `--ro` / `--no-noload` 等）または GUI 操作（選択行、チェックボックス、ドラッグ＆ドロップ）。
 - **処理 / 契約**: 既定は RO（青色ボタン・`Read-Only (ro,noload)` バッジ）、RW 選択時は明確に視覚差別化（アンバー色ボタン・`Read-Write (rw)` バッジ、`NoLoadCheckBox` 無効化）し、一覧やトレイメニューに `RO` / `RW` を表示する。
 

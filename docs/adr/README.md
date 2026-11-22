@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADR)
 
-**WslDrive** における重要なアーキテクチャ選定、Windows 11 / WSL2 固有課題の解決策、および技術的トレードオフの判断記録です。
+**WslMountDrive** における重要なアーキテクチャ選定、Windows 11 / WSL2 固有課題の解決策、および技術的トレードオフの判断記録です。
 
 ## 運用ルール
 

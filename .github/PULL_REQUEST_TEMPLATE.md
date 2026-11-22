@@ -12,8 +12,8 @@
 
 ## Verification
 
-- [ ] `dotnet build WslDrive.sln -c Release` succeeds with 0 errors
-- [ ] `dotnet test WslDrive.sln -c Release` passes
+- [ ] `dotnet build WslMountDrive.sln -c Release` succeeds with 0 errors
+- [ ] `dotnet test WslMountDrive.sln -c Release` passes
 - [ ] Documentation updated (`docs/`, `CHANGELOG.md`, or `docs/adr/` if architectural)
 - [ ] Verified commands / environment:
   - `...`

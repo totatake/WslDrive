@@ -9,7 +9,7 @@
 
 ## Security Model & Privilege Boundaries
 
-`WslDrive` interacts with low-level Windows and WSL2 primitives that require careful trust boundaries:
+`WslMountDrive` interacts with low-level Windows and WSL2 primitives that require careful trust boundaries:
 
 - **Elevation (`requireAdministrator`)**: Raw disk inspection (`\\.\PhysicalDriveX`) and `wsl --mount` require Administrator privileges.
 - **Token Impersonation**: `DriveMapper` duplicates the desktop shell's (`explorer.exe`) non-elevated token solely for calling `DefineDosDeviceW` in the interactive user's `\DosDevices` namespace and immediately calls `RevertToSelf()`.

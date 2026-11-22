@@ -1,4 +1,4 @@
-# WslDrive
+# WslMountDrive
 
 > **Mount Linux partitions (`ext4` / `btrfs` / `xfs`) on Windows 11 as native drive letters via WSL2 — safe Read-Only (`ro,noload`) by default, with optional Read-Write (`--rw`) support.**
 
@@ -8,9 +8,16 @@
 
 ## Overview
 
-`WslDrive` is a C# utility (CLI and WPF GUI with system tray integration) for Windows 11 that mounts Linux partitions on separate physical disks, `.vhdx` virtual disks, or Windows-shared physical disks via WSL2 and exposes them as ordinary Windows drive letters (such as `L:\`) in File Explorer and elevated terminals.
+`WslMountDrive` is a C# utility (CLI and WPF GUI with system tray integration) for Windows 11 that mounts Linux partitions on separate physical disks, `.vhdx` virtual disks, or Windows-shared physical disks via WSL2 and exposes them as ordinary Windows drive letters (such as `L:\`) in File Explorer and elevated terminals.
 
 No third-party kernel filesystem drivers (Dokan, WinFsp, etc.) are required. It uses Windows 11's built-in WSL2 Linux kernel drivers combined with NT DOS device mapping (`DefineDosDeviceW`) and non-elevated desktop token impersonation (`explorer.exe`).
+
+### Difference from `wsldrive`
+
+> **Note:** This project was previously named `WslDrive`, and was renamed to **`WslMountDrive`** to avoid confusion with the existing [zcsizmadia/wsldrive](https://github.com/zcsizmadia/wsldrive) (now [hawserhq/wsldrive](https://github.com/hawserhq/wsldrive)) project.
+>
+> - **`wsldrive`**: Exposes an **existing WSL2 distro's virtual filesystem** (as a faster WinFsp-based replacement for `\\wsl.localhost\<Distro>\`) as a Windows drive without administrator privileges.
+> - **`WslMountDrive` (this project)**: Mounts **physical Linux disk partitions, `.vhdx`/`.img` files, and Windows-shared disks** into WSL2 via `wsl --mount` (or a Read-Only NBD bridge) and maps them as Windows drive letters using `DefineDosDeviceW` — without requiring WinFsp or Dokan.
 
 ## Key Features
 
@@ -28,8 +35,8 @@ No third-party kernel filesystem drivers (Dokan, WinFsp, etc.) are required. It 
 Requires Windows 11, WSL2, and [.NET 8.0 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0) (`winget install Microsoft.DotNet.DesktopRuntime.8`) for pre-built releases, or the .NET 8.0 SDK (`net8.0-windows`) to build from source:
 
 ```powershell
-dotnet build WslDrive.sln -c Release
-dotnet test WslDrive.sln -c Release
+dotnet build WslMountDrive.sln -c Release
+dotnet test WslMountDrive.sln -c Release
 ```
 
 Or run the helper script:
@@ -44,24 +51,24 @@ Run from an Administrator terminal:
 
 ```powershell
 # List physical disks and detected Linux partitions
-WslDrive.Cli.exe list
+WslMountDrive.Cli.exe list
 
 # Mount PhysicalDrive1 Partition 2 to L: (Read-Only by default: ro,noload)
-WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
+WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
 
 # Mount as Read-Write (rw)
-WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
+WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
 
 # Check active WSL2 mounts and mapped drive letters
-WslDrive.Cli.exe status
+WslMountDrive.Cli.exe status
 
 # Unmount and remove drive mapping
-WslDrive.Cli.exe unmount --letter L:
+WslMountDrive.Cli.exe unmount --letter L:
 ```
 
 ### GUI Usage
 
-1. Launch `WslDrive.App.exe` (requests UAC elevation via `app.manifest`, or use **Relaunch as Administrator** inside the window).
+1. Launch `WslMountDrive.App.exe` (requests UAC elevation via `app.manifest`, or use **Relaunch as Administrator** inside the window).
 2. Select a detected Linux partition (or drag & drop a `.vhdx` / `.vhd` / `.img` file), choose a drive letter, and click **Mount**.
 3. Optionally check **読み書き可能 (RW) でマウント** before mounting when Read-Write access is needed (disabled for Windows-shared NBD bridge disks).
 4. Manage active drives from the bottom list or the system tray icon.

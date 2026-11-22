@@ -20,10 +20,10 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}".TrimStart('v')
-          [xml]$csproj = Get-Content src/WslDrive.App/WslDrive.App.csproj
+          [xml]$csproj = Get-Content src/WslMountDrive.App/WslMountDrive.App.csproj
           $ver = $csproj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
           if ($tag -ne $ver) {
-            Write-Error "Git tag '$tag' does not match WslDrive.App.csproj Version '$ver'."
+            Write-Error "Git tag '$tag' does not match WslMountDrive.App.csproj Version '$ver'."
             exit 1
           }
 
@@ -34,25 +34,25 @@ jobs:
 
       - name: Build and test (Release)
         run: |
-          dotnet build WslDrive.sln -c Release
-          dotnet test WslDrive.sln -c Release --no-build
+          dotnet build WslMountDrive.sln -c Release
+          dotnet test WslMountDrive.sln -c Release --no-build
 
       - name: Publish framework-dependent binaries (win-x64)
         shell: pwsh
         run: |
-          dotnet publish src/WslDrive.App/WslDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/WslDrive-win-x64
-          dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/WslDrive-win-x64
-          Copy-Item LICENSE publish/WslDrive-win-x64/LICENSE
-          Copy-Item README.md publish/WslDrive-win-x64/README.md
-          Copy-Item README.ja.md publish/WslDrive-win-x64/README.ja.md
-          Compress-Archive -Path publish/WslDrive-win-x64/* -DestinationPath publish/WslDrive-win-x64.zip
-          $hash = (Get-FileHash publish/WslDrive-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  WslDrive-win-x64.zip" | Set-Content -Encoding ascii publish/SHA256SUMS.txt
+          dotnet publish src/WslMountDrive.App/WslMountDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/WslMountDrive-win-x64
+          dotnet publish src/WslMountDrive.Cli/WslMountDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/WslMountDrive-win-x64
+          Copy-Item LICENSE publish/WslMountDrive-win-x64/LICENSE
+          Copy-Item README.md publish/WslMountDrive-win-x64/README.md
+          Copy-Item README.ja.md publish/WslMountDrive-win-x64/README.ja.md
+          Compress-Archive -Path publish/WslMountDrive-win-x64/* -DestinationPath publish/WslMountDrive-win-x64.zip
+          $hash = (Get-FileHash publish/WslMountDrive-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  WslMountDrive-win-x64.zip" | Set-Content -Encoding ascii publish/SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            publish/WslDrive-win-x64.zip
+            publish/WslMountDrive-win-x64.zip
             publish/SHA256SUMS.txt
           generate_release_notes: true

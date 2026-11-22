@@ -22,7 +22,7 @@ Windows の WSL2 サービス（`wslservice.exe` / `WslCoreVm`）は `m_attached
   1. 毎回 `/proc/mounts` と `DriveMapper.GetMappedNetworkDrives()` を突き合わせてセッション復元し、CLI 再実行や GUI 再起動でも整合を保つ。
   2. 同一ディスクに他パーティションが残存する場合は WSL 内の個別 `umount` のみに留め、最後の 1 件または全体アンマウント時は `umount` を先行させず直接 `wsl --unmount` を呼ぶ。
   3. 再マウント時に `WSL_E_DISK_ALREADY_MOUNTED` かつ兄弟パーティションが存在する場合は、兄弟デバイス名（`/dev/sdc` や `/dev/nvme0n1`）から対象パーティションを直接マウントする（`TryMountSiblingPartitionInWslAsync`）。
-  4. 最終デタッチで `wsl --unmount` が失敗した際は、空ディレクトリとして残る `/mnt/wsl/wsldrive_*` に無害な自己バインドマウント（`mount --bind "$d" "$d"`）を補ってからリトライし、`mini_init` の `umount() + rmdir()` を完了させる（`EnsureStaleMountPointsBoundForDetachAsync`）。
+  4. 最終デタッチで `wsl --unmount` が失敗した際は、空ディレクトリとして残る `/mnt/wsl/wslmountdrive_*` に無害な自己バインドマウント（`mount --bind "$d" "$d"`）を補ってからリトライし、`mini_init` の `umount() + rmdir()` を完了させる（`EnsureStaleMountPointsBoundForDetachAsync`）。
 - **デメリット / リスク**: 状態遷移テストの網羅が必要。
 
 ## 3. 決定 (Decision)
@@ -32,5 +32,5 @@ Windows の WSL2 サービス（`wslservice.exe` / `WslCoreVm`）は `m_attached
 ## 4. 結果と影響 (Consequences)
 
 - **良い影響**: CLI / GUI 双方からマルチパーティションを安全に同時利用・個別解除でき、GUI では意図しない兄弟切断を防ぐ確認ダイアログも表示できる。
-- **受け入れるトレードオフ / 今後の制約**: 自動生成マウント名（`wsldrive_d<N>p<M>`）および `/proc/mounts` の書式に依存する。
-- **関連する変更箇所**: [WslMountService.cs](../../src/WslDrive.Core/Wsl/WslMountService.cs), [MainWindow.xaml.cs](../../src/WslDrive.App/MainWindow.xaml.cs), [WslMountServiceTests.cs](../../tests/WslDrive.Tests/WslMountServiceTests.cs)
+- **受け入れるトレードオフ / 今後の制約**: 自動生成マウント名（`wslmountdrive_d<N>p<M>`）および `/proc/mounts` の書式に依存する。
+- **関連する変更箇所**: [WslMountService.cs](../../src/WslMountDrive.Core/Wsl/WslMountService.cs), [MainWindow.xaml.cs](../../src/WslMountDrive.App/MainWindow.xaml.cs), [WslMountServiceTests.cs](../../tests/WslMountDrive.Tests/WslMountServiceTests.cs)

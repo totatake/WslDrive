@@ -30,4 +30,4 @@ Windows 11 環境から別ドライブや `.vhdx` 上の Linux パーティシ�
 
 - **良い影響**: 外部ドライバのインストール不要で `ext4` / `btrfs` / `xfs` に対応可能になった。
 - **受け入れるトレードオフ / 今後の制約**: 動作前提として Windows 11 上で WSL2 と 1 つ以上の Linux ディストリビューションが有効化されている必要がある。
-- **関連する変更箇所**: [WslMountService.cs](../../src/WslDrive.Core/Wsl/WslMountService.cs), [WslCliRunner.cs](../../src/WslDrive.Core/Wsl/WslCliRunner.cs)
+- **関連する変更箇所**: [WslMountService.cs](../../src/WslMountDrive.Core/Wsl/WslMountService.cs), [WslCliRunner.cs](../../src/WslMountDrive.Core/Wsl/WslCliRunner.cs)

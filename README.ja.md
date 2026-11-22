@@ -1,4 +1,4 @@
-# WslDrive
+# WslMountDrive
 
 > **Windows 11上で Linux パーティション（`ext4` / `btrfs` / `xfs`）を WSL2 経由で通常ドライブとしてマウント — デフォルトは安全な Read-Only（`ro,noload`）、オプションで Read-Write（`--rw`）にも対応**
 
@@ -8,9 +8,16 @@
 
 ## 概要
 
-`WslDrive` は、Windows 11 上で別ドライブや `.vhdx` 仮想ディスク、さらに Windows と同居する物理ディスク上の Linux パーティションを WSL2 経由でマウントし、エクスプローラーや管理者ターミナルから通常のドライブレター（`L:\` 等）として透過的にアクセスできる C# ユーティリティ（CLI およびタスクトレイ常駐対応 WPF GUI）です。
+`WslMountDrive` は、Windows 11 上で別ドライブや `.vhdx` 仮想ディスク、さらに Windows と同居する物理ディスク上の Linux パーティションを WSL2 経由でマウントし、エクスプローラーや管理者ターミナルから通常のドライブレター（`L:\` 等）として透過的にアクセスできる C# ユーティリティ（CLI およびタスクトレイ常駐対応 WPF GUI）です。
 
 サードパーティ製カーネルドライバ（Dokan / WinFsp 等）のインストールは不要で、Windows 11 標準の WSL2 カーネルドライバと NT DOS デバイスリンク（`DefineDosDeviceW`）および非昇格トークン偽装（`explorer.exe`）を組み合わせて動作します。
+
+### 既存の `wsldrive` との違い
+
+> **注記:** 本プロジェクトは当初 `WslDrive` として公開していましたが、既存の [zcsizmadia/wsldrive](https://github.com/zcsizmadia/wsldrive)（現 [hawserhq/wsldrive](https://github.com/hawserhq/wsldrive)）との名称重複を避けるため、**`WslMountDrive`** に名称を変更しました。
+>
+> - **`wsldrive`**: **既存の WSL2 ディストリビューション内部の仮想ファイルシステム**（`\\wsl.localhost\<Distro>\` の Plan 9 経由アクセスの高速代替）を、管理者権限不要・WinFsp ベースで Windows ドライブとして公開するツールです。
+> - **`WslMountDrive`（本プロジェクト）**: **物理ディスク上の Linux パーティションや `.vhdx`/`.img` イメージ、Windows 同居ディスク**を `wsl --mount`（または Read-Only NBD ブリッジ）経由で WSL2 にマウントし、WinFsp / Dokan 等の外部ドライバなしで Windows ドライブレター（`DefineDosDeviceW`）として公開するツールです。
 
 ## 主な特徴
 
@@ -28,8 +35,8 @@
 ビルド済みバイナリの実行には Windows 11、WSL2、および [.NET 8.0 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0)（`winget install Microsoft.DotNet.DesktopRuntime.8`）が必要です。ソースからビルドする場合は .NET 8.0 SDK（`net8.0-windows`）を使用します：
 
 ```powershell
-dotnet build WslDrive.sln -c Release
-dotnet test WslDrive.sln -c Release
+dotnet build WslMountDrive.sln -c Release
+dotnet test WslMountDrive.sln -c Release
 ```
 
 ヘルパースクリプトを使う場合：
@@ -44,24 +51,24 @@ dotnet test WslDrive.sln -c Release
 
 ```powershell
 # 物理ディスクおよび検出された Linux パーティション一覧を表示
-WslDrive.Cli.exe list
+WslMountDrive.Cli.exe list
 
 # PhysicalDrive1 の Partition 2 を L: ドライブとして RO マウント（既定: ro,noload）
-WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
+WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
 
 # Read-Write (読み書き可能) でマウントする場合
-WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
+WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
 
 # マウント状態とドライブ割当の確認
-WslDrive.Cli.exe status
+WslMountDrive.Cli.exe status
 
 # アンマウント ＆ ドライブ解除
-WslDrive.Cli.exe unmount --letter L:
+WslMountDrive.Cli.exe unmount --letter L:
 ```
 
 ### GUI アプリの利用方法
 
-1. `WslDrive.App.exe` を起動します（`app.manifest` により自動で UAC 昇格を要求します。非昇格時は右上の「管理者として再起動」から昇格できます）。
+1. `WslMountDrive.App.exe` を起動します（`app.manifest` により自動で UAC 昇格を要求します。非昇格時は右上の「管理者として再起動」から昇格できます）。
 2. 検出された Linux パーティション行を選択し（`.vhdx` / `.vhd` / `.img` のドラッグ＆ドロップも可能）、ドライブレターを選んで **「▶ 選択行をマウント」** をクリックします。
 3. 書き込みを行いたい場合は、マウント前に **「読み書き可能 (RW) でマウント」** をオンにします（Windows 同居ディスクの NBD ブリッジ経路では RO 専用となります）。
 4. 画面下部のマウント一覧やタスクトレイアイコンから開く・アンマウント操作を行えます。

@@ -1,14 +1,14 @@
-# システムアーキテクチャ設計書 (`WslDrive`)
+# システムアーキテクチャ設計書 (`WslMountDrive`)
 
-本ドキュメントは **WslDrive** の現行システム構成、コンポーネント責務、主要データフロー、スーパーブロック解析仕様、および境界設計を定義します。個別の設計判断理由（なぜ他案ではなく本方式を採ったか）は [adr/README.md](adr/README.md) に記録しています。
+本ドキュメントは **WslMountDrive** の現行システム構成、コンポーネント責務、主要データフロー、スーパーブロック解析仕様、および境界設計を定義します。個別の設計判断理由（なぜ他案ではなく本方式を採ったか）は [adr/README.md](adr/README.md) に記録しています。
 
 ## 1. 全体構成図
 
 ### ソリューション・ディレクトリ構成
 
 ```text
-WslDrive/
-├── WslDrive.sln
+WslMountDrive/
+├── WslMountDrive.sln
 ├── README.md                             # 英語メイン README
 ├── README.ja.md                          # 日本語 README (1:1 ミラー)
 ├── LICENSE                               # MIT License
@@ -17,7 +17,7 @@ WslDrive/
 ├── scripts/                              # build-and-test.ps1 等ヘルパースクリプト
 ├── docs/                                 # 設計・要件・ガイド・ADR・テストドキュメント
 ├── src/
-│   ├── WslDrive.Core/                    # 共通コアライブラリ (net8.0-windows)
+│   ├── WslMountDrive.Core/                    # 共通コアライブラリ (net8.0-windows)
 │   │   ├── Models/
 │   │   │   ├── LinuxFileSystemType.cs    # FS 種別列挙体 (Ext2/3/4, Btrfs, Xfs 等)
 │   │   │   ├── PartitionEntry.cs         # パーティション情報 (開始オフセット/FS/Label/UUID)
@@ -36,10 +36,10 @@ WslDrive/
 │   │   └── Interop/
 │   │       ├── NativeMethods.cs          # Win32 API P/Invoke 定義
 │   │       └── DriveMapper.cs            # UAC 透過ドライブレター割当・解除・Explorer 通知
-│   ├── WslDrive.Cli/                     # コンソールアプリ (list / mount / unmount / status)
-│   └── WslDrive.App/                     # WPF GUI + タスクトレイアプリ (app.manifest で管理者昇格)
+│   ├── WslMountDrive.Cli/                     # コンソールアプリ (list / mount / unmount / status)
+│   └── WslMountDrive.App/                     # WPF GUI + タスクトレイアプリ (app.manifest で管理者昇格)
 └── tests/
-    └── WslDrive.Tests/                   # xUnit 単体テスト
+    └── WslMountDrive.Tests/                   # xUnit 単体テスト
 ```
 
 ### コンポーネント関連図
@@ -47,11 +47,11 @@ WslDrive/
 ```mermaid
 flowchart TD
     subgraph UI["プレゼンテーション層"]
-        CLI["WslDrive.Cli\n(CLIツール: --rw / RO既定)"]
-        APP["WslDrive.App\n(WPF GUI + タスクトレイ)"]
+        CLI["WslMountDrive.Cli\n(CLIツール: --rw / RO既定)"]
+        APP["WslMountDrive.App\n(WPF GUI + タスクトレイ)"]
     end
 
-    subgraph Core["WslDrive.Core (net8.0-windows)"]
+    subgraph Core["WslMountDrive.Core (net8.0-windows)"]
         Scanner["DiskScanner\n(WMI + Raw Disk列挙)"]
         PT["PartitionTableReader\n(GPT / MBR / EBR解析)"]
         SB["SuperblockInspector\n(ext4 / btrfs / xfs解析)"]
@@ -90,12 +90,12 @@ flowchart TD
 
 | モジュール / パス | 責務 | 依存制約 / 不変条件 |
 | :--- | :--- | :--- |
-| `src/WslDrive.Core/Disk/` | 物理ディスク・イメージの読み取り専用走査と MBR/EBR/GPT/スーパーブロック解析 | 必ず `GENERIC_READ` で開き、書き込み API を一切持たない |
-| `src/WslDrive.Core/Wsl/` | `wsl.exe` 実行、`/proc/mounts` からのステートレス復元、RO/RW 引数構築、NBD ブリッジ制御 | 既定は `ro,noload`（`ReadWrite == false`）、NBD 経路では RW 禁止、最後の一括解除前は WSL 内 `umount` を先行させない |
-| `src/WslDrive.Core/Interop/` | Win32 P/Invoke と `DefineDosDeviceW` + トークン偽装によるドライブレター割当・解除 | 偽装後必ず `RevertToSelf()` を実行し、通常ユーザー・管理者双方のセッションに反映する |
-| `src/WslDrive.Cli/` | サブコマンド（`list` / `mount` / `unmount` / `status`）と NBD 常駐サブプロセス（`__nbd-daemon`） | `WslDrive.Core` のみに依存し、テスト可能なサービス層を呼び出す |
-| `src/WslDrive.App/` | WPF 操作画面と WinForms システムトレイ管理 | `app.manifest` で管理者昇格を要求し、非昇格起動時は再起動ボタンを提供する |
-| `tests/WslDrive.Tests/` | モック（`IWslCommandRunner` / `INbdBridgeProvider`）と合成ストリームによる自動単体テスト | 実機 WSL や実ディスクに依存せず CI 上で高速実行できる |
+| `src/WslMountDrive.Core/Disk/` | 物理ディスク・イメージの読み取り専用走査と MBR/EBR/GPT/スーパーブロック解析 | 必ず `GENERIC_READ` で開き、書き込み API を一切持たない |
+| `src/WslMountDrive.Core/Wsl/` | `wsl.exe` 実行、`/proc/mounts` からのステートレス復元、RO/RW 引数構築、NBD ブリッジ制御 | 既定は `ro,noload`（`ReadWrite == false`）、NBD 経路では RW 禁止、最後の一括解除前は WSL 内 `umount` を先行させない |
+| `src/WslMountDrive.Core/Interop/` | Win32 P/Invoke と `DefineDosDeviceW` + トークン偽装によるドライブレター割当・解除 | 偽装後必ず `RevertToSelf()` を実行し、通常ユーザー・管理者双方のセッションに反映する |
+| `src/WslMountDrive.Cli/` | サブコマンド（`list` / `mount` / `unmount` / `status`）と NBD 常駐サブプロセス（`__nbd-daemon`） | `WslMountDrive.Core` のみに依存し、テスト可能なサービス層を呼び出す |
+| `src/WslMountDrive.App/` | WPF 操作画面と WinForms システムトレイ管理 | `app.manifest` で管理者昇格を要求し、非昇格起動時は再起動ボタンを提供する |
+| `tests/WslMountDrive.Tests/` | モック（`IWslCommandRunner` / `INbdBridgeProvider`）と合成ストリームによる自動単体テスト | 実機 WSL や実ディスクに依存せず CI 上で高速実行できる |
 
 ## 3. 主要データフローと状態遷移
 
@@ -115,15 +115,15 @@ sequenceDiagram
     Scanner-->>UI: パーティション一覧 (ext4, Label, UUID, Size)
 
     User->>UI: 2. PhysicalDrive1 Partition 2 を L: にマウント要求 (既定 RO / 任意 --rw)
-    UI->>Wsl: wsl.exe --mount \\.\PhysicalDrive1 --partition 2 --name wsldrive_d1p2 --type ext4 --options "ro,noload"
-    Wsl-->>UI: /mnt/wsl/wsldrive_d1p2 にマウント成功
+    UI->>Wsl: wsl.exe --mount \\.\PhysicalDrive1 --partition 2 --name wslmountdrive_d1p2 --type ext4 --options "ro,noload"
+    Wsl-->>UI: /mnt/wsl/wslmountdrive_d1p2 にマウント成功
 
     UI->>Wsl: 既定WSLディストロ名を取得 (例: Ubuntu)
-    Wsl-->>UI: UNCパス確定: \\wsl.localhost\Ubuntu\mnt\wsl\wsldrive_d1p2
+    Wsl-->>UI: UNCパス確定: \\wsl.localhost\Ubuntu\mnt\wsl\wslmountdrive_d1p2
 
     UI->>Mapper: 3. explorer.exe非昇格トークン偽装 + 管理者セッションの双方で L: にUNCパスを割当
     Mapper->>Exp: ImpersonateLoggedOnUser + DefineDosDeviceW(0, "L:", uncPath) + SHChangeNotify(DRIVEADD)
-    Mapper-->>UI: L: ドライブ割り当て完了 (\??\UNC\wsl.localhost\Ubuntu\mnt\wsl\wsldrive_d1p2)
+    Mapper-->>UI: L: ドライブ割り当て完了 (\??\UNC\wsl.localhost\Ubuntu\mnt\wsl\wslmountdrive_d1p2)
 
     User->>Exp: 4. エクスプローラーまたはターミナルで L:\ を開いて透過的にアクセス
 ```

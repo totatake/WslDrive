@@ -1,6 +1,6 @@
-# 概要・開発背景・既存手法との比較 (`WslDrive`)
+# 概要・開発背景・既存手法との比較 (`WslMountDrive`)
 
-本ドキュメントでは、**WslDrive** を開発した背景、技術アプローチの比較検討結果、技術的な柱、および実践的なユースケースを整理します。
+本ドキュメントでは、**WslMountDrive** を開発した背景、技術アプローチの比較検討結果、技術的な柱、および実践的なユースケースを整理します。
 
 ## 1. 開発背景と解決したい課題
 
@@ -41,7 +41,7 @@ flowchart LR
 
 1. **安全な既定 Read-Only 保護（Safe by Default）**: 明示的な `--rw` / GUI チェックがない限り `ro,noload`（未対応 FS は `ro`）でマウントし、ハイバネーション中や強制終了後の Dirty な ext4 でもディスク書き込みを行いません。
 2. **OS 境界の完全自動化**: `p9np.dll` の制限を `DefineDosDeviceW` で回避し、UAC 分離を `explorer.exe` トークン偽装で透過化するため、レジストリ（`EnableLinkedConnections`）変更や再起動が不要です。
-3. **CLI・GUI ハイブリッド運用**: スクリプト・自動化向けの `WslDrive.Cli` と、視覚的な一覧・ドラッグ＆ドロップ・タスクトレイ常駐を備えた `WslDrive.App` を同一コアライブラリ（`WslDrive.Core`）上で提供します。
+3. **CLI・GUI ハイブリッド運用**: スクリプト・自動化向けの `WslMountDrive.Cli` と、視覚的な一覧・ドラッグ＆ドロップ・タスクトレイ常駐を備えた `WslMountDrive.App` を同一コアライブラリ（`WslMountDrive.Core`）上で提供します。
 
 ## 4. 実践ユースケース
 
@@ -50,8 +50,8 @@ flowchart LR
 - **対象環境**: Windows 11 + WSL2、別 SSD/HDD または同居ディスク上の ext4/btrfs/xfs パーティション
 - **手順 / コマンド例**:
   ```powershell
-  WslDrive.Cli.exe list
-  WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
+  WslMountDrive.Cli.exe list
+  WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
   ```
 - **注意点**: Windows が使用中の物理ディスク（`C:` と同居等）では安全のため Read-Only NBD ブリッジが自動選択され、`--rw` は使用できません。
 
@@ -60,6 +60,6 @@ flowchart LR
 - **対象環境**: Windows 未使用の物理ディスク、または `.vhdx` イメージ
 - **手順 / コマンド例**:
   ```powershell
-  WslDrive.Cli.exe mount --vhd C:\VMs\data.vhdx --partition 1 --letter L: --rw
+  WslMountDrive.Cli.exe mount --vhd C:\VMs\data.vhdx --partition 1 --letter L: --rw
   ```
-- **注意点**: RW マウント後は `WslDrive.Cli.exe unmount --letter L:` で必ず安全にアンマウントしてからディスクや `.vhdx` を取り外してください。
+- **注意点**: RW マウント後は `WslMountDrive.Cli.exe unmount --letter L:` で必ず安全にアンマウントしてからディスクや `.vhdx` を取り外してください。

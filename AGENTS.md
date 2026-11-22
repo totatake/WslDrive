@@ -1,18 +1,18 @@
-# AGENTS.md — AI Agent Operational Guide for WslDrive
+# AGENTS.md — AI Agent Operational Guide for WslMountDrive
 
 This file provides concise repository context, build/test commands, and architectural invariants for automated coding agents. Human-oriented background and comparisons live in [docs/overview.md](docs/overview.md).
 
 ## 1. Repository Map
 
-- `WslDrive.sln` — Visual Studio / .NET 8 solution
-- `src/WslDrive.Core/` — Core library (`net8.0-windows`):
+- `WslMountDrive.sln` — Visual Studio / .NET 8 solution
+- `src/WslMountDrive.Core/` — Core library (`net8.0-windows`):
   - `Models/` — `MountRequest`, `MountSession`, `PartitionEntry`, `PhysicalDiskEntry`, `LinuxFileSystemType`
   - `Disk/` — `AlignedDiskStream`, `PartitionTableReader`, `SuperblockInspector`, `DiskScanner`
   - `Wsl/` — `WslCliRunner`, `NbdDiskBridge`, `WslMountService`
   - `Interop/` — `NativeMethods`, `DriveMapper`
-- `src/WslDrive.Cli/` — Console CLI (`list`, `mount`, `unmount`, `status`, internal `__nbd-daemon`)
-- `src/WslDrive.App/` — WPF GUI + WinForms system tray app (`app.manifest` requires admin)
-- `tests/WslDrive.Tests/` — xUnit unit tests (using mocked `IWslCommandRunner` / `INbdBridgeProvider` and synthetic streams)
+- `src/WslMountDrive.Cli/` — Console CLI (`list`, `mount`, `unmount`, `status`, internal `__nbd-daemon`)
+- `src/WslMountDrive.App/` — WPF GUI + WinForms system tray app (`app.manifest` requires admin)
+- `tests/WslMountDrive.Tests/` — xUnit unit tests (using mocked `IWslCommandRunner` / `INbdBridgeProvider` and synthetic streams)
 - `scripts/` — PowerShell build/test/publish helpers (`scripts/build-and-test.ps1`)
 - `docs/` — Engineering documentation (Japanese default, lowercase `kebab-case`)
 
@@ -20,16 +20,16 @@ This file provides concise repository context, build/test commands, and architec
 
 ```powershell
 # Build solution (Release)
-dotnet build WslDrive.sln -c Release
+dotnet build WslMountDrive.sln -c Release
 
 # Run xUnit unit tests (Release)
-dotnet test WslDrive.sln -c Release
+dotnet test WslMountDrive.sln -c Release
 
 # Build, test, and optionally publish single-file executables
 .\scripts\build-and-test.ps1 -Publish
 ```
 
-Note: If `WslDrive.App.exe` is currently running (including minimized in the system tray), `WslDrive.App` Release output file copy may fail due to file locking on `WslDrive.Core.dll`. Do not forcefully terminate a user's running instance if it may hold active mounts.
+Note: If `WslMountDrive.App.exe` is currently running (including minimized in the system tray), `WslMountDrive.App` Release output file copy may fail due to file locking on `WslMountDrive.Core.dll`. Do not forcefully terminate a user's running instance if it may hold active mounts.
 
 ## 3. Architectural Invariants & Guardrails
 
@@ -38,7 +38,7 @@ Note: If `WslDrive.App.exe` is currently running (including minimized in the sys
 - **WSL2 Unmount Ordering**: Do NOT run `umount /mnt/wsl/<name>` before `wsl --unmount <target>` when detaching the last partition on a disk; `wslservice.exe` requires `/mnt/wsl/<name>` to remain mounted for `mini_init` teardown unless another sibling partition stays mounted.
 - **Drive Mapping via `DefineDosDeviceW` + Token Impersonation**: Do NOT switch back to `WNetAddConnection2W` / `net use` for `/mnt/wsl/...` subdirectories (`p9np.dll` rejects >2 path components with error 67/64). Preserve `explorer.exe` non-elevated impersonation + elevated `DefineDosDeviceW` calls.
 - **Stateless Session Inspection**: `WslMountService.GetActiveMountsAsync` reconstructs state from `/proc/mounts` and `DriveMapper.GetMappedNetworkDrives()` without relying solely on in-memory dictionaries.
-- **Mount Prefix**: Default auto-generated mount names use `wsldrive_d<disk>p<part>` / `wsldrive_<vhd>` and NBD handshake markers use `WSLDRIVE_NBD_READY:` / `WSLDRIVE_NBD_ERROR:`.
+- **Mount Prefix**: Default auto-generated mount names use `wslmountdrive_d<disk>p<part>` / `wslmountdrive_<vhd>` and NBD handshake markers use `WSLMOUNTDRIVE_NBD_READY:` / `WSLMOUNTDRIVE_NBD_ERROR:`.
 
 ## 4. Documentation Rules
 

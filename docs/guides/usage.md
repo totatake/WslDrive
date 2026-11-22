@@ -1,6 +1,6 @@
-# 利用ガイド (`WslDrive`)
+# 利用ガイド (`WslMountDrive`)
 
-ユーザー・運用者向けの動作環境、ビルド＆発行方法、CLI リファレンス、および GUI アプリ（`WslDrive.App`）の使い方をまとめます。エラーやパーミッション制限への対処は [troubleshooting.md](troubleshooting.md) を参照してください。
+ユーザー・運用者向けの動作環境、ビルド＆発行方法、CLI リファレンス、および GUI アプリ（`WslMountDrive.App`）の使い方をまとめます。エラーやパーミッション制限への対処は [troubleshooting.md](troubleshooting.md) を参照してください。
 
 ## 1. 前提環境
 
@@ -19,16 +19,16 @@ PowerShell またはコマンドプロンプトからリポジトリルートで
 
 ```powershell
 # 依存パッケージの復元とビルド
-dotnet build WslDrive.sln -c Release
+dotnet build WslMountDrive.sln -c Release
 
 # 単体テストの実行
-dotnet test WslDrive.sln -c Release
+dotnet test WslMountDrive.sln -c Release
 
 # 軽量な Framework-Dependent 単一実行ファイルとして出力する例（GUI アプリ）
-dotnet publish src/WslDrive.App/WslDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/App
+dotnet publish src/WslMountDrive.App/WslMountDrive.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/App
 
 # CLI ツールの出力例
-dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/Cli
+dotnet publish src/WslMountDrive.Cli/WslMountDrive.Cli.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=none -p:DebugSymbols=false -o publish/Cli
 ```
 
 または同梱のヘルパースクリプトを使用できます：
@@ -37,7 +37,7 @@ dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c Release -r win-x64 --self
 .\scripts\build-and-test.ps1 -Publish
 ```
 
-## 3. CLI リファレンス (`WslDrive.Cli`)
+## 3. CLI リファレンス (`WslMountDrive.Cli`)
 
 物理ディスクの生読み取りおよび `wsl --mount` を実行するため、**管理者として実行したターミナル**から利用してください。
 
@@ -45,13 +45,13 @@ dotnet publish src/WslDrive.Cli/WslDrive.Cli.csproj -c Release -r win-x64 --self
 
 ```powershell
 # Linux パーティションを検出したディスクのみ表示（推奨）
-WslDrive.Cli.exe list
+WslMountDrive.Cli.exe list
 
 # Windows パーティションを含め全パーティションを表示
-WslDrive.Cli.exe list --all
+WslMountDrive.Cli.exe list --all
 
 # ディスクイメージファイル（.img / .vhd / .vhdx）の内部パーティションを事前検査
-WslDrive.Cli.exe list --image C:\VMs\linux_disk.img
+WslMountDrive.Cli.exe list --image C:\VMs\linux_disk.img
 ```
 
 ### 3.2 マウント ＆ ドライブレター割当 (`mount`)
@@ -62,7 +62,7 @@ WslDrive.Cli.exe list --image C:\VMs\linux_disk.img
 | `--vhd <path>` | — | `.vhd` / `.vhdx` ファイルパス（`--disk` と排他） |
 | `--partition, -p <num>` | 自動検出 | マウント対象の 1 始まりパーティション番号 |
 | `--letter, -l <L:>` | 空き先頭文字 | 割り当てる Windows ドライブレター |
-| `--name, -n <name>` | `wsldrive_*` | `/mnt/wsl/<name>` のマウント名 |
+| `--name, -n <name>` | `wslmountdrive_*` | `/mnt/wsl/<name>` のマウント名 |
 | `--fs, --type, -t <type>` | 自動判定 | ファイルシステム種別（`ext4`, `btrfs`, `xfs` 等） |
 | `--rw` / `--read-write` | `false` (RO) | Read-Write（`rw`）モードでマウント |
 | `--ro` / `--read-only` | `true` (既定) | 明示的に Read-Only モードを指定 |
@@ -71,19 +71,19 @@ WslDrive.Cli.exe list --image C:\VMs\linux_disk.img
 
 ```powershell
 # PhysicalDrive1 の Partition 2 を L: ドライブとして RO マウント（既定: ro,noload）
-WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
+WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L:
 
 # Read-Write (読み書き可能) でマウントする場合 (--rw または --read-write)
-WslDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
+WslMountDrive.Cli.exe mount --disk 1 --partition 2 --letter L: --rw
 
 # パーティション番号省略・マウント名・ディストロ指定の例
-WslDrive.Cli.exe mount --disk 2 --partition 1 --letter M: --name mydata --distro Ubuntu
+WslMountDrive.Cli.exe mount --disk 2 --partition 1 --letter M: --name mydata --distro Ubuntu
 
 # btrfs 等で noload オプションを使わず通常の ro のみを使う場合
-WslDrive.Cli.exe mount --disk 1 --partition 1 --letter L: --fs btrfs --no-noload
+WslMountDrive.Cli.exe mount --disk 1 --partition 1 --letter L: --fs btrfs --no-noload
 
 # .vhdx 仮想ディスクファイルをマウントする場合（--rw も利用可能）
-WslDrive.Cli.exe mount --vhd C:\VMs\data.vhdx --partition 1 --letter L:
+WslMountDrive.Cli.exe mount --vhd C:\VMs\data.vhdx --partition 1 --letter L:
 ```
 
 > [!NOTE]
@@ -92,7 +92,7 @@ WslDrive.Cli.exe mount --vhd C:\VMs\data.vhdx --partition 1 --letter L:
 ### 3.3 マウント状態の確認 (`status`)
 
 ```powershell
-WslDrive.Cli.exe status
+WslMountDrive.Cli.exe status
 ```
 
 ### 3.4 アンマウント ＆ ドライブ解除 (`unmount`)
@@ -101,24 +101,24 @@ WslDrive.Cli.exe status
 # ドライブレターを指定してネットワークドライブ解除
 # ・他パーティションが同ディスクに残っていなければディスクも自動切り離し
 # ・他パーティションが同ディスクでマウント中の場合は該当パーティションのみ個別アンマウント
-WslDrive.Cli.exe unmount --letter L:
+WslMountDrive.Cli.exe unmount --letter L:
 
 # 物理ディスク番号のみを指定して、そのディスク上の全ドライブを一括解除・切り離し
-WslDrive.Cli.exe unmount --disk 1
+WslMountDrive.Cli.exe unmount --disk 1
 
 # 明示的に指定して解除（--letter と併用時は該当セッションを個別解除）
-WslDrive.Cli.exe unmount --letter L: --disk 1
+WslMountDrive.Cli.exe unmount --letter L: --disk 1
 
 # VHDX をアンマウントする場合
-WslDrive.Cli.exe unmount --letter L: --vhd C:\VMs\data.vhdx
+WslMountDrive.Cli.exe unmount --letter L: --vhd C:\VMs\data.vhdx
 ```
 
 > [!TIP]
 > 同じ物理ディスク上の複数パーティション（例: `--partition 1` を `L:`、`--partition 2` を `M:`）を同時にマウントすることも可能です。`unmount --letter L:` で片方だけを外した場合はディスクのアタッチを維持したまま `L:` のみを安全に解除し、最後の 1 つ（`M:`）を外したタイミングまたは `unmount --disk 1` 実行時に物理ディスクを WSL2 から切り離します。
 
-## 4. GUI アプリ (`WslDrive.App`) の使い方
+## 4. GUI アプリ (`WslMountDrive.App`) の使い方
 
-1. `WslDrive.App.exe` を起動します（マニフェストにより自動で UAC 管理者昇格プロンプトが表示されます。非昇格状態で起動した場合は画面右上の **「管理者として再起動」** ボタンからワンクリックで昇格できます）。
+1. `WslMountDrive.App.exe` を起動します（マニフェストにより自動で UAC 管理者昇格プロンプトが表示されます。非昇格状態で起動した場合は画面右上の **「管理者として再起動」** ボタンからワンクリックで昇格できます）。
    - 表示言語は画面右上のプルダウン（`Auto` / `日本語` / `English`）から切り替えられます（既定は `Auto` で、OS の表示言語に応じて日本語または英語を自動選択します）。
 2. 上部の **「① 検出されたディスク ＆ Linux パーティション一覧」** に物理ドライブおよびパーティション（`ext4` / `btrfs` / `xfs`、ボリュームラベル、容量、マウント状態）が自動表示されます。
    - `.vhdx` / `.vhd` / `.img` ファイルをウィンドウへ**ドラッグ＆ドロップ**して直接追加することも可能です。

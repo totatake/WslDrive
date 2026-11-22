@@ -11,7 +11,7 @@ Describe the problem or workflow limitation you are facing.
 
 ## Proposed Solution
 
-Describe how you would like WslDrive to behave (including CLI flags or GUI options).
+Describe how you would like WslMountDrive to behave (including CLI flags or GUI options).
 
 ## Alternatives Considered
 

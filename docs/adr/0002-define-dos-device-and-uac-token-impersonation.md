@@ -8,7 +8,7 @@
 
 WSL2 でマウントしたパーティションは UNC パス `\\wsl.localhost\<Distro>\mnt\wsl\<MountName>` として公開されますが、通常のネットワークドライブ割り当てには 2 つの Windows 固有障壁がありました。
 
-1. **Plan 9 Network Provider (`p9np.dll`) による拒否（エラー 64 / 67）**: `WNetAddConnection2W` や `net use L: \\wsl.localhost\Ubuntu\mnt\wsl\wsldrive_d2p2` を実行すると、`p9np.dll!NPAddConnection3` が UNC パス要素数 `== 2`（ルート共有のみ）を厳密検査するため、3 要素以上のサブディレクトリに対して `WN_BAD_NETNAME` (67) を返し、後続の SMB フォールバックでエラー 64 (`ERROR_NETNAME_DELETED`) で失敗します。また `subst.exe` は UNC パスを受け付けません。
+1. **Plan 9 Network Provider (`p9np.dll`) による拒否（エラー 64 / 67）**: `WNetAddConnection2W` や `net use L: \\wsl.localhost\Ubuntu\mnt\wsl\wslmountdrive_d2p2` を実行すると、`p9np.dll!NPAddConnection3` が UNC パス要素数 `== 2`（ルート共有のみ）を厳密検査するため、3 要素以上のサブディレクトリに対して `WN_BAD_NETNAME` (67) を返し、後続の SMB フォールバックでエラー 64 (`ERROR_NETNAME_DELETED`) で失敗します。また `subst.exe` は UNC パスを受け付けません。
 2. **UAC セッション分離**: 物理ディスク読み取りや `wsl --mount` には管理者権限が必須ですが、昇格プロセスから `DefineDosDeviceW` を呼ぶと管理者用ログオンセッション（`\Sessions\0\DosDevices\<ElevatedLogonId>\`）にのみリンクが作られ、通常ユーザー権限の `explorer.exe` からはドライブが見えません。
 
 ## 2. 検討した選択肢 (Alternatives Considered)
@@ -29,4 +29,4 @@ WSL2 でマウントしたパーティションは UNC パス `\\wsl.localhost\<
 
 - **良い影響**: インストール直後からエクスプローラーと管理者ターミナルの双方で `L:\` が即時に認識される（最後に `SHChangeNotify(SHCNE_DRIVEADD)` と `WM_SETTINGCHANGE` を通知）。
 - **受け入れるトレードオフ / 今後の制約**: 状態照会・アンマウント時は `QueryDosDeviceW` が返す `\??\UNC\...` や `\Device\P9Rdr\;...` 形式を標準 UNC パスへ逆変換する必要がある（`DriveMapper.TryParseDosDeviceUncTarget`）。
-- **関連する変更箇所**: [DriveMapper.cs](../../src/WslDrive.Core/Interop/DriveMapper.cs), [NativeMethods.cs](../../src/WslDrive.Core/Interop/NativeMethods.cs)
+- **関連する変更箇所**: [DriveMapper.cs](../../src/WslMountDrive.Core/Interop/DriveMapper.cs), [NativeMethods.cs](../../src/WslMountDrive.Core/Interop/NativeMethods.cs)

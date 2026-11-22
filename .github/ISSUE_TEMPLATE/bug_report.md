@@ -11,14 +11,14 @@ A concise description of the bug.
 
 ## Environment
 
-- **WslDrive version / commit**:
+- **WslMountDrive version / commit**:
 - **Windows 11 version / build**: (e.g., Windows 11 24H2 Build 26100)
 - **WSL2 version** (`wsl --version`):
 - **Target disk / filesystem**: (e.g., separate physical disk / Windows-shared disk / `.vhdx`, `ext4` / `btrfs` / `xfs`)
 
 ## Steps to Reproduce
 
-1. Run `WslDrive.Cli.exe ...` (or GUI steps)
+1. Run `WslMountDrive.Cli.exe ...` (or GUI steps)
 2. Observe `...`
 
 ## Expected Behavior

@@ -27,4 +27,4 @@
 
 - **良い影響**: 誤操作による書き込みを既定で防ぎつつ、CLI・GUI の双方で柔軟に RW マウントが可能になった。
 - **受け入れるトレードオフ / 今後の制約**: Windows 同居ディスクの NBD ブリッジ経路では安全性優先のため RW を許可しない（[ADR-0005](0005-read-only-nbd-bridge-for-windows-shared-disks.md)）。
-- **関連する変更箇所**: [MountRequest.cs](../../src/WslDrive.Core/Models/MountRequest.cs), [MountSession.cs](../../src/WslDrive.Core/Models/MountSession.cs), [WslMountService.cs](../../src/WslDrive.Core/Wsl/WslMountService.cs), [Program.cs](../../src/WslDrive.Cli/Program.cs), [MainWindow.xaml.cs](../../src/WslDrive.App/MainWindow.xaml.cs)
+- **関連する変更箇所**: [MountRequest.cs](../../src/WslMountDrive.Core/Models/MountRequest.cs), [MountSession.cs](../../src/WslMountDrive.Core/Models/MountSession.cs), [WslMountService.cs](../../src/WslMountDrive.Core/Wsl/WslMountService.cs), [Program.cs](../../src/WslMountDrive.Cli/Program.cs), [MainWindow.xaml.cs](../../src/WslMountDrive.App/MainWindow.xaml.cs)

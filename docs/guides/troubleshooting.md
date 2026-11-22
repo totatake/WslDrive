@@ -1,4 +1,4 @@
-# トラブルシューティング (`WslDrive`)
+# トラブルシューティング (`WslMountDrive`)
 
 本ドキュメントでは、利用時に遭遇しやすいパーミッション制限、Windows 同居ディスク制約、および WSL2 状態不整合の対処法をまとめます。基本的な操作方法は [usage.md](usage.md) を参照してください。
 
@@ -26,7 +26,7 @@
 `C:` などの Windows ボリュームが存在する同一物理ディスク上の Linux パーティションに対し、CLI の `--rw` または GUI の「読み書き可能 (RW) でマウント」を実行するとエラーになる。
 
 ### 原因と仕様
-Windows が使用中の物理ディスクは `wsl --mount` が `ERROR_SHARING_VIOLATION` でアタッチを拒否するため、`WslDrive` は安全性の高い **Read-Only 専用 NBD ブリッジ**（`AlignedDiskStream` ＋ `/dev/nbdX`）を使用します。Windows 側ファイルシステムとの競合・破損を防ぐため、NBD ブリッジ経路では RW マウントを禁止しています（[ADR-0005](../adr/0005-read-only-nbd-bridge-for-windows-shared-disks.md)）。
+Windows が使用中の物理ディスクは `wsl --mount` が `ERROR_SHARING_VIOLATION` でアタッチを拒否するため、`WslMountDrive` は安全性の高い **Read-Only 専用 NBD ブリッジ**（`AlignedDiskStream` ＋ `/dev/nbdX`）を使用します。Windows 側ファイルシステムとの競合・破損を防ぐため、NBD ブリッジ経路では RW マウントを禁止しています（[ADR-0005](../adr/0005-read-only-nbd-bridge-for-windows-shared-disks.md)）。
 
 ### 対処法
 - 読み取り専用のままチェックを外して（`--rw` なしで）マウントするか、RW 操作が必要な場合は Windows 未使用の別物理ディスクまたは `.vhdx` ファイルを使用してください。
@@ -37,7 +37,7 @@ Windows が使用中の物理ディスクは `wsl --mount` が `ERROR_SHARING_VI
 過去に手動で `wsl` 内から `umount` を実行した等の理由で、`wslservice.exe` 内部に古いアタッチ状態が残留し、再マウントに失敗する。
 
 ### 対処法
-1. `WslDrive` は `/proc/mounts` 再利用や `wsl --unmount` リトライ、`/mnt/wsl/wsldrive_*` 自己バインド補完を自動試行します（[ADR-0004](../adr/0004-wsl-unmount-ordering-and-multi-partition-management.md)）。
+1. `WslMountDrive` は `/proc/mounts` 再利用や `wsl --unmount` リトライ、`/mnt/wsl/wslmountdrive_*` 自己バインド補完を自動試行します（[ADR-0004](../adr/0004-wsl-unmount-ordering-and-multi-partition-management.md)）。
 2. それでも WSL2 VM 側の状態不整合が解消しない場合は、すべての WSL2 作業を保存した上で管理者ターミナルから一度リセットしてください：
    ```powershell
    wsl --shutdown

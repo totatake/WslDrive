@@ -20,18 +20,18 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Restore dependencies
-        run: dotnet restore WslDrive.sln
+        run: dotnet restore WslMountDrive.sln
 
       - name: Build (Release)
-        run: dotnet build WslDrive.sln -c Release --no-restore
+        run: dotnet build WslMountDrive.sln -c Release --no-restore
 
       - name: Run unit tests (Release)
-        run: dotnet test WslDrive.sln -c Release --no-build --verbosity normal
+        run: dotnet test WslMountDrive.sln -c Release --no-build --verbosity normal
 
       - name: Check vulnerable NuGet packages
         shell: pwsh
         run: |
-          $out = dotnet list WslDrive.sln package --vulnerable --include-transitive | Out-String
+          $out = dotnet list WslMountDrive.sln package --vulnerable --include-transitive | Out-String
           Write-Host $out
           if ($out -match '(?i)\b(High|Critical)\b') {
             Write-Error "High or Critical NuGet vulnerabilities detected."
