@@ -103,7 +103,10 @@ public sealed class AppStrings : INotifyPropertyChanged
     public string OpenExplorerCheck => T("マウント後にエクスプローラーで自動的に開く", "Open in File Explorer after mount");
     public string MountSelectedRw => T("▶ 選択行をマウント (RW)", "▶ Mount Selected (RW)");
     public string MountSelectedRo => T("▶ 選択行をマウント (RO)", "▶ Mount Selected (RO)");
-    public string UnmountSelected => T("⏏ アンマウント", "⏏ Unmount");
+    public string UnmountSelected => T("⏏ 選択行をアンマウント", "⏏ Unmount Selected");
+    public string UnmountSelectedToolTip => T(
+        "選択中の行（またはマウント中のドライブ）をアンマウントし、ドライブ割り当てを解除します。",
+        "Unmount the selected row (or active mount) and remove its drive letter mapping.");
 
     // Active Mounts Grid
     public string ActiveMountsHeader => T("② 現在マウント中の Linux ドライブ (WSL2 /mnt/wsl)", "2. Active Linux Mounts (WSL2 /mnt/wsl)");
@@ -116,7 +119,6 @@ public sealed class AppStrings : INotifyPropertyChanged
     public string ColActiveUnc => T("UNC パス", "UNC Path");
     public string ColActiveActions => T("操作", "Actions");
     public string ActiveRowOpenButton => T("📂 開く", "📂 Open");
-    public string ActiveRowUnmountButton => T("⏏ 解除", "⏏ Unmount");
 
     // Log Expander
     public string LogHeader => T("実行ログ・詳細メッセージ", "Activity Log & Details");

@@ -521,14 +521,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void ActiveRowUnmountButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { DataContext: MountSession session })
-        {
-            await UnmountSessionAsync(session);
-        }
-    }
-
     private void ActiveMountsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (ActiveMountsGrid.SelectedItem is MountSession session)

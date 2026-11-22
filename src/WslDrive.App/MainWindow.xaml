@@ -194,7 +194,8 @@
                             Cursor="Hand"
                             Click="MountButton_Click" />
                     <Button x:Name="UnmountButton"
-                            Content="⏏ アンマウント"
+                            Content="⏏ 選択行をアンマウント"
+                            ToolTip="{Binding Source={x:Static loc:AppStrings.Instance}, Path=UnmountSelectedToolTip, Mode=OneWay}"
                             Padding="14,7"
                             Cursor="Hand"
                             Click="UnmountButton_Click" />
@@ -227,7 +228,7 @@
                     <DataGridTextColumn x:Name="ColActiveDevice" Header="WSL デバイス" Binding="{Binding SourceDeviceInWsl}" Width="110" />
                     <DataGridTextColumn x:Name="ColActiveOptions" Header="オプション" Binding="{Binding MountOptions}" Width="150" />
                     <DataGridTextColumn x:Name="ColActiveUnc" Header="UNC パス" Binding="{Binding UncPath}" Width="*" />
-                    <DataGridTemplateColumn x:Name="ColActiveActions" Header="操作" Width="180">
+                    <DataGridTemplateColumn x:Name="ColActiveActions" Header="操作" Width="105">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -236,18 +237,9 @@
                                             Foreground="White"
                                             FontWeight="SemiBold"
                                             BorderThickness="0"
-                                            Padding="10,3"
-                                            Margin="0,0,6,0"
+                                            Padding="12,3"
                                             Cursor="Hand"
                                             Click="ActiveRowOpenButton_Click" />
-                                    <Button Content="{Binding Source={x:Static loc:AppStrings.Instance}, Path=ActiveRowUnmountButton, Mode=OneWay}"
-                                            Background="#DC3545"
-                                            Foreground="White"
-                                            FontWeight="SemiBold"
-                                            BorderThickness="0"
-                                            Padding="10,3"
-                                            Cursor="Hand"
-                                            Click="ActiveRowUnmountButton_Click" />
                                 </StackPanel>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
