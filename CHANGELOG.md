@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
 ### Security
 - Validated `FileSystemType` strictly (`[A-Za-z0-9][A-Za-z0-9._-]{0,31}`) and replaced `sh -c` string concatenation with direct argument passing in `WslMountService` to prevent shell command injection.
 - Rejected oversized `CmdWrite` payloads exceeding `MaxReadLengthBytes` in `ReadOnlyNbdServer`.

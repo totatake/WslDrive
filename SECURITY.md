@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | :--- | :--- |
-| `v0.1.x` (`master`) | Yes |
-| Pre-`v0.1.0` snapshots | No |
+| `v0.2.x` (`master`) | Yes |
+| `v0.1.x` and earlier | No |
 
 ## Security Model & Privilege Boundaries
 

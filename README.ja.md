@@ -2,7 +2,7 @@
 
 > **Windows 11上で Linux パーティション（`ext4` / `btrfs` / `xfs`）を WSL2 経由で通常ドライブとしてマウント — デフォルトは安全な Read-Only（`ro,noload`）、オプションで Read-Write（`--rw`）にも対応**
 
-**Version:** `v0.1.0` | **Language:** [English](README.md) | 日本語
+**Version:** `v0.2.0` | **Language:** [English](README.md) | 日本語
 
 ---
 
