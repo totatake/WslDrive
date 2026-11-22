@@ -1,25 +1,25 @@
-# LinuxRoDrive アーキテクチャ設計・開発計画書
+# WslDrive アーキテクチャ設計・開発計画書
 
-Windows 11上で、別ドライブにあるLinuxパーティション（`ext4` / `btrfs` / `xfs` 等）をRead-Only（読み取り専用）で安全にマウントし、エクスプローラーから通常のドライブレター（`L:\` など）として透過的にアクセスできるユーティリティ **`LinuxRoDrive`** の要件定義・設計・実装計画書です。
+Windows 11上で、別ドライブにあるLinuxパーティション（`ext4` / `btrfs` / `xfs` 等）を安全にマウントし、エクスプローラーから通常のドライブレター（`L:\` など）として透過的にアクセスできるユーティリティ **`WslDrive`** の要件定義・設計・実装計画書です（デフォルトは Read-Only、オプションで Read-Write にも対応）。
 
 ---
 
 ## 1. 背景とアプローチ選定
 
-Windows 11環境でLinuxパーティションをRead-Onlyマウントするにあたり、以下の3つの主要アプローチを比較検討しました。
+Windows 11環境でLinuxパーティションを安全にマウントするにあたり、以下の3つの主要アプローチを比較検討しました。
 
 | 比較項目 | **案A: `LTRData.DiscUtils.Ext` + `DokanNet` (C#)** | **案B: WSL2 (`wsl --mount`) + ドライブ割当【採用】** | **案C: `libext2fs` + `Dokan` (C/C++)** |
 | :--- | :--- | :--- | :--- |
 | **Linuxカーネル互換性** | ○ 一般的なext4は対応（一部拡張機能に制約） | **◎ 100%（本物のLinuxカーネルドライバ）** | ◎ 非常に高い（e2fsprogs公式ライブラリ） |
 | **対応ファイルシステム** | ext2 / ext3 / ext4 のみ | **◎ ext4 / btrfs / xfs 等カーネル標準FS全般** | ext2 / ext3 / ext4 のみ |
 | **外部ドライバ導入** | Dokan / WinFsp のインストールが必要 | **◎ 不要（Windows 11 + WSL2標準機能のみ）** | Dokan / WinFsp のインストールが必要 |
-| **書き込み防止の安全性** | C#コード側でWrite拒否 | **◎ Linuxカーネルの `ro,noload` マウント** | Cコード側でWrite拒否 |
-| **Windows (C:等) と同居する物理ディスクの別パーティション** | ◎ マウント可能 | **◎ マウント可能**（`AlignedDiskStream` ＋ WSL2 カーネル NBD Read-Only ブリッジで対応） | ◎ マウント可能 |
+| **書き込み保護・RW柔軟性** | C#コード側で制御 | **◎ Linuxカーネルの `ro,noload`（既定） / `rw` 切替** | Cコード側で制御 |
+| **Windows (C:等) と同居する物理ディスクの別パーティション** | ◎ マウント可能 | **◎ マウント可能**（`AlignedDiskStream` ＋ WSL2 カーネル NBD Read-Only 専用ブリッジで対応） | ◎ マウント可能 |
 | **同一の別物理ディスク（または `.vhdx`）内の複数パーティション同時マウント** | ◎ マウント可能 | **◎ マウント可能**（パーティション単位のセッション管理＋個別/一括アンマウント制御で対応） | ◎ マウント可能 |
 | **開発・保守の容易さ** | ◎ NuGetのみで完結 | **◎ 非常にシンプルかつ堅牢** | △ CライブラリのWindowsビルドが必要 |
 
 **採用理由（案B）**:
-別ドライブ（SSD/HDD）や仮想ディスク（`.vhdx`）に保存されたLinuxパーティションを安全に読む用途において、サードパーティ製カーネルドライバ（BSODリスクやドライバ署名問題）を一切導入せずに、Linuxカーネル本体のファイルシステムドライバによる100%の互換性と安全性（`ro,noload`）を得られるため、案Bを採用しました。
+別ドライブ（SSD/HDD）や仮想ディスク（`.vhdx`）に保存されたLinuxパーティションへアクセスする用途において、サードパーティ製カーネルドライバ（BSODリスクやドライバ署名問題）を一切導入せずに、Linuxカーネル本体のファイルシステムドライバによる100%の互換性と安全な既定 Read-Only（`ro,noload`）、および必要時の Read-Write（`rw`）両対応を実現できるため、案Bを採用しました。
 
 ---
 
@@ -31,19 +31,20 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
    - 各物理ドライブがWindows側のマウント済みボリューム（`C:` 等）を含んでいるか判定し、`wsl --mount` 可能かどうかを事前警告表示。
    - MBRおよびGPTパーティションテーブルを解析し、さらに各パーティション先頭のスーパーブロック（ext2/ext3/ext4, btrfs, xfs, swap, LUKS）を直接読み取ることで、**マウント前からファイルシステム種別・ボリュームラベル・UUID・サイズを正確に一覧表示**。
    - 物理ディスクだけでなく、生ディスクイメージ（`.img`）や `.vhdx` ファイルの構造検査および `.vhdx` マウントにも対応。
-2. **Read-Only マウント ＆ ドライブレター割り当て (`WslMountService` / `DriveMapper`)**
+2. **Read-Only / Read-Write マウント ＆ ドライブレター割り当て (`WslMountService` / `DriveMapper`)**
    - 指定した物理ディスク・パーティション（または `.vhdx`）を `wsl.exe --mount` により `/mnt/wsl/<MountName>` へマウント。
-   - デフォルトで `ro,noload` オプションを付与し、ジャーナル再生によるディスク書き込みを一切発生させない完全なRead-Only保護を実現（`ro,noload` 非対応FSの場合は自動的に `ro` へフォールバック）。
+   - デフォルト（`ReadWrite == false`）では `ro,noload` オプションを付与し、ジャーナル再生によるディスク書き込みを一切発生させない完全なRead-Only保護を実現（`ro,noload` 非対応FSの場合は自動的に `ro` へフォールバック）。
+   - ユーザーが明示的に RW オプション（CLI `--rw` / GUI チェックボックス、`ReadWrite == true`）を指定した場合は `--options rw` で読み書き可能マウントを実行（ただし Windows 同居ディスクの NBD ブリッジは安全のため Read-Only 専用とし、RW 指定時は拒否）。
    - マウントパス（`\\wsl.localhost\<Distro>\mnt\wsl\<MountName>`）を、指定されたWindowsの空きドライブレター（例: `L:`）へDOSデバイスシンボリックリンク（`DefineDosDeviceW`）として割り当て、エクスプローラーおよび管理者ターミナルの双方から通常のドライブと同様に透過アクセスできるようにする。
 3. **安全なアンマウント ＆ クリーンアップ**
    - 割り当てたドライブレターの解除（`DefineDosDeviceW(DDD_REMOVE_DEFINITION)` / `WNetCancelConnection2W`）、WSL内の `umount`、および `wsl.exe --unmount` を一括実行し、安全に物理ドライブを切り離す。
 4. **CLI ＆ GUI（タスクトレイ常駐対応）ハイブリッド構成**
-   - `LinuxRoDrive.Core`: 再利用可能な .NET 8 クラスライブラリ。
-   - `LinuxRoDrive.Cli`: `list`, `mount`, `unmount`, `status` サブコマンドを備えたコマンドラインツール。
-   - `LinuxRoDrive.App`: WPFベースの操作ウィンドウ＋Windowsフォーム製タスクトレイ常駐機能を備えたデスクトップアプリ。
+   - `WslDrive.Core`: 再利用可能な .NET 8 クラスライブラリ。
+   - `WslDrive.Cli`: `list`, `mount`, `unmount`, `status` サブコマンドを備えたコマンドラインツール（`--rw` / `--ro` 切替対応）。
+   - `WslDrive.App`: WPFベースの操作ウィンドウ＋Windowsフォーム製タスクトレイ常駐機能を備えたデスクトップアプリ（RO/RW 切替チェックボックス・モード表示対応）。
 
 ### 2.2 非機能要件・安全性要件
-- **100% Read-Only 保証**: 物理ディスクのスキャン時は `CreateFileW` で `GENERIC_READ` のみを使用。WSLマウント時は `ro,noload` を標準とし、ハイバネーション中や強制終了後のDirtyなext4パーティションでもディスクへの変更を行わない。
+- **既定 Read-Only 保証（Safe by Default）**: 物理ディスクのスキャン時は `CreateFileW` で `GENERIC_READ` のみを使用。WSLマウント時は明示的な RW 指定がない限り `ro,noload` を標準とし、ハイバネーション中や強制終了後のDirtyなext4パーティションでもディスクへの変更を行わない。また Windows 使用中の物理ディスク向け NBD ブリッジは RW を許可しない。
 - **軽量・シンプル**: .NET 8 (`net8.0-windows`) で構築し、単一実行ファイル（Self-Contained）としても配布可能。
 
 ---
@@ -55,7 +56,7 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 ### 課題①：Plan 9 Network Provider (`p9np.dll`) がサブディレクトリのドライブ割当を拒否する問題（エラー 64）
 - **現象と根本原因**:
   - `wsl --mount` は対象パーティションを WSL 内の `/mnt/wsl/<MountName>`（UNCパス `\\wsl.localhost\<Distro>\mnt\wsl\<MountName>`）にマウントします。
-  - しかし、このサブディレクトリ UNC パスに対して `WNetAddConnection2W` や `net use L: \\wsl.localhost\Ubuntu\mnt\wsl\linuxro_d2p2` を実行すると、**Win32 エラー 64 (`ERROR_NETNAME_DELETED`: 指定されたネットワーク名は利用できません。) / `net use` 終了コード 2** で失敗します。
+  - しかし、このサブディレクトリ UNC パスに対して `WNetAddConnection2W` や `net use L: \\wsl.localhost\Ubuntu\mnt\wsl\wsldrive_d2p2` を実行すると、**Win32 エラー 64 (`ERROR_NETNAME_DELETED`: 指定されたネットワーク名は利用できません。) / `net use` 終了コード 2** で失敗します。
   - Windows 標準の `C:\Windows\System32\p9np.dll`（Plan 9 Network Provider）の `NPAddConnection3` 実装を解析すると、入力された UNC パスを `\` で分割し、**パス要素数がちょうど 2 個（`\\wsl.localhost\<Distro>` または `\\wsl$\<Distro>` のルート共有）であるかを厳密に検査（`components.size() == 2`）**しており、3要素以上のサブディレクトリパスに対しては即座に `WN_BAD_NETNAME` (`0x43` = 67) を返して拒否する仕様になっています。
   - `p9np.dll` が `WN_BAD_NETNAME` を返すと、`mpr.dll` は次のネットワークプロバイダである Windows SMB クライアント（`LanmanWorkstation`）へフォールバックし、`wsl.localhost:445` へ SMB ネゴシエーションを試みてエラー 64（または資格情報プロンプト後のキャンセル）となります。
   - また、`subst.exe` コマンドはローカルドライブパス（`\??\X:\...`）のみを受け付け、UNC パスを指定するとエラーになります。
@@ -78,19 +79,19 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 ### 課題③：Dirty Journal（未クリーン終了ext4）のROマウント失敗または勝手な再生書き込み
 - **原因**: Linux側で正常アンマウントされていないext4パーティションを通常の `-o ro` でマウントすると、Linuxカーネルが安全性のためジャーナルを再生（ディスクへ書き込み）しようとしてエラーになったり、わずかなメタデータ更新が発生したりする場合があります。
 - **解決設計 (`WslMountService`)**:
-  - ext4マウント時のオプションに **`ro,noload`** をデフォルト採用します。`noload` はジャーナルの読み込み・再生をスキップし、ブロックデバイスへの書き込みを完全に抑止します。btrfs や xfs など `noload` を受け付けないFSでは自動的に `ro` にフォールバックします。
+  - Read-Only マウント時のオプションに **`ro,noload`** をデフォルト採用します。`noload` はジャーナルの読み込み・再生をスキップし、ブロックデバイスへの書き込みを完全に抑止します。btrfs や xfs など `noload` を受け付けないFSでは自動的に `ro` にフォールバックします（明示的な RW 指定時は `--options rw` を使用します）。
 
 ### 課題④：Linux側のパーミッション（UID/GID不一致・`/root` 等）によるアクセス拒否
 - **原因**: `\\wsl.localhost\<Distro>\mnt\wsl\<Name>` 経由のアクセスは、WSLディストリビューションの既定ユーザー権限（通常 `uid=1000`）で評価されるため、別PCのLinux環境や `chmod 600` のファイル、`/root` ディレクトリ等を開くとアクセス拒否となることがあります。
 - **運用・設計上の対策**:
-  - Windows側ツールからはRead-Onlyドライブとして確実に公開しつつ、もし管理者権限が必須なシステム領域にアクセスしたい場合は、WSL側ディストロの `/etc/wsl.conf` での既定ユーザー調整、またはWSL内での `bindfs` 活用方法についてドキュメント（`docs/testing_and_usage_guide.md`）で案内します。
+  - 通常のマウント機能は維持しつつ、もし管理者権限が必須なシステム領域にアクセスしたい場合は、WSL側ディストロの `/etc/wsl.conf` での既定ユーザー調整、またはWSL内での `bindfs` 活用方法についてドキュメント（`docs/testing_and_usage_guide.md`）で案内します。
 
 ### 課題⑤：`wsl --unmount` の実行順序による `WSL_E_DISK_ALREADY_MOUNTED` 残留の回避
 - **原因**: Windows の WSL2 サービス（`wslservice.exe`）は `wsl --unmount <target>` の際、内部管理テーブル（`m_attachedDisks`）からディスクを削除する**前**に Linux 側 `mini_init` へ `/mnt/wsl/<name>` の `umount()` を指示する仕様になっています。そのため、先にホスト側から `wsl ... -- umount /mnt/wsl/<name>` を実行してしまうと、後続の `wsl --unmount` が `EINVAL`（既に未マウント）で失敗し、`wslservice.exe` 上にアタッチ状態が残留して再マウント時に `WSL_E_DISK_ALREADY_MOUNTED` が発生するデッドロックに陥ります。
 - **解決設計 (`WslMountService.UnmountAsync`)**:
   - 原則として Linux 側の `umount` を先行させず、**直接 `wsl.exe --unmount <target>` を実行して WSL2 サービスにマウント解除とディスク切り離しを一括処理**させます（同一物理ディスク上の別パーティションがまだマウントされている場合のみ、個別パーティションの `umount` を行います）。
-  - ドライブレターのみを指定したアンマウント（`unmount --letter L:`）でも、`DriveMapper` で取得した UNC パスのマウント名（`linuxro_d<N>p<M>`）から `\\.\PhysicalDrive<N>` を自動逆引きし、`wsl --unmount` を確実に呼び出します。
-  - 万一過去の不整合等で `WSL_E_DISK_ALREADY_MOUNTED` が発生した場合は、`/proc/mounts` に既存の Read-Only マウントがあれば再利用し、なければ `wsl --unmount` で切り離しを試みてリトライします（それでも解消しない場合のみ `wsl --shutdown` でのリセットを案内）。
+  - ドライブレターのみを指定したアンマウント（`unmount --letter L:`）でも、`DriveMapper` で取得した UNC パスのマウント名（`wsldrive_d<N>p<M>`）から `\\.\PhysicalDrive<N>` を自動逆引きし、`wsl --unmount` を確実に呼び出します。
+  - 万一過去の不整合等で `WSL_E_DISK_ALREADY_MOUNTED` が発生した場合は、`/proc/mounts` に要求モード（RO/RW）と一致する既存マウントがあれば再利用し（モードが異なる場合は混同防止のためアンマウントを促すエラーを返却）、なければ `wsl --unmount` で切り離しを試みてリトライします（それでも解消しない場合のみ `wsl --shutdown` でのリセットを案内）。
 
 ### 課題⑥：同一物理ディスク（または VHDX）内の複数パーティション同時マウントと個別・一括アンマウント制御
 - **現象と WSL2 内部仕様**:
@@ -103,7 +104,7 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
   - **ステートレスなセッション管理**: プロセス内メモリ（静的辞書）のみに頼ると CLI の複数回呼び出しや GUI 再起動で状態が欠落するため、`GetActiveMountsAsync` が毎回 `/proc/mounts` と `DriveMapper.GetMappedNetworkDrives()` を突き合わせて `DiskIndex`・`PartitionNumber`・`SourceDeviceInWsl`・`TargetWslDiskPath` を復元します。
   - **再マウント時の兄弟デバイス利用 (`TryMountSiblingPartitionInWslAsync`)**: `wsl --mount` が `WSL_E_DISK_ALREADY_MOUNTED` を返した場合でも、`/proc/mounts` 上に同じディスクの兄弟パーティション（例: `/dev/sdc2`）がアクティブに残っていれば、`wsl --unmount` によるディスク切り離しを行わず、兄弟のベースブロックデバイス名（`/dev/sdc`）＋対象パーティション番号から導出したデバイス（`/dev/sdc1`、NVMe 等は `nvme0n1p1`）を直接 `/mnt/wsl/<mountName>` へ `ro,noload`（必要に応じ `ro`）でマウントします。
   - **個別・一括アンマウントの自動分岐 (`UnmountAsync`)**: `--letter` 指定またはマウント名指定のアンマウント時、同一物理ディスクまたは同一ベースブロックデバイス（`/dev/sdc` 等）上に他パーティションが残存している場合は、ドライブレター解除＋当該マウントポイントのみの `umount` に留め、物理ディスクはアタッチしたまま維持します。最後の1件を外す場合、または `unmount --disk <N>` / `forceWholeDisk: true` の場合は、紐づく全ドライブレターを解除してから `wsl --unmount` でディスクごと切り離します。
-  - **最終デタッチ前のマウントポイント補完 (`EnsureStaleMountPointsBoundForDetachAsync`)**: ディスク全体の `wsl --unmount` が失敗した際（または未マウントの stale 状態からデタッチを試みる際）、過去に個別 `umount` 済みで空ディレクトリとして残っている `/mnt/wsl/linuxro_*` に対し、無害な自己バインドマウント（`mount --bind "$d" "$d"`）を補ってから `wsl --unmount` を再実行することで、`mini_init` の `umount()` ＋ `rmdir()` を正常完了させてディスクを確実にデタッチします。
+  - **最終デタッチ前のマウントポイント補完 (`EnsureStaleMountPointsBoundForDetachAsync`)**: ディスク全体の `wsl --unmount` が失敗した際（または未マウントの stale 状態からデタッチを試みる際）、過去に個別 `umount` 済みで空ディレクトリとして残っている `/mnt/wsl/wsldrive_*` に対し、無害な自己バインドマウント（`mount --bind "$d" "$d"`）を補ってから `wsl --unmount` を再実行することで、`mini_init` の `umount()` ＋ `rmdir()` を正常完了させてディスクを確実にデタッチします。
   - **GUI 確認ダイアログ (`MainWindow.UnmountSessionAsync`)**: 同一ディスクに他のマウント中パーティションがある状態で単一行をアンマウントしようとした場合、「選択したパーティションのみ個別アンマウント (`[はい]`)」か「同一ディスクの全パーティションを一括アンマウント (`[いいえ]`)」かを確認し、意図しない兄弟ドライブの切断を防ぎます。
 
 ### 課題⑦：Windows (`C:` 等) と同居する物理ディスク上の Linux パーティションのマウント（`ERROR_SHARING_VIOLATION` 回避と Read-Only NBD ブリッジ）
@@ -111,7 +112,7 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
   - `wsl --mount \\.\PhysicalDrive0` は Hyper-V 仮想 SCSI 経由で物理ディスク全体を VM へパススルーするため、同じ物理ドライブ上に Windows がマウント中のボリューム（`C:` 等）が存在すると `ERROR_SHARING_VIOLATION` (`0x80070020`) でアタッチが拒否されます。
   - 一方、Windows カーネルは管理者権限プロセスによる `CreateFileW("\\\\.\\PhysicalDrive0", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE)` でのセクタ境界読み取りは許可しています。
 - **解決設計 (`ReadOnlyNbdServer` / `NbdDiskBridge` / `WslMountService`)**:
-  - **ハイブリッド自動切替**: Windows 未使用の別ドライブや `.vhdx` はこれまで通りネイティブの `wsl --mount` を使用し、Windows 使用中の物理ディスク（`HasWindowsMountedVolumes == true` または `wsl --mount` が `ERROR_SHARING_VIOLATION` を返した場合）は自動的に **Read-Only NBD ブリッジ方式**へ切り替えます（`ForceNbdBridge`）。
+  - **ハイブリッド自動切替**: Windows 未使用の別ドライブや `.vhdx` はこれまで通りネイティブの `wsl --mount`（RO / RW 両対応）を使用し、Windows 使用中の物理ディスク（`HasWindowsMountedVolumes == true` または `wsl --mount` が `ERROR_SHARING_VIOLATION` を返した場合）は自動的に **Read-Only 専用 NBD ブリッジ方式**へ切り替えます（`ForceNbdBridge`。Windows 側ファイルシステムとの競合・破損防止のため、NBD ブリッジ経路では `ReadWrite == true` を拒否します）。
   - **WSL2 標準カーネル機能のみを利用（外部ドライバ・apt 不要）**: WSL2 標準カーネル（`5.15.x` 等）に標準搭載されている `CONFIG_BLK_DEV_NBD=m` を `modprobe nbd` でロードし、ディストロ標準の `python3`（`ctypes` + `socket.socketpair` + `NBD_SET_SOCK` / `NBD_SET_FLAGS(NBD_FLAG_READ_ONLY)` / `NBD_DO_IT` ioctl）経由で `/dev/nbdX` ブロックデバイスを構成します。
   - **3重の Read-Only 保護**: Windows 側は `GENERIC_READ` 専用オープン＋対象パーティション範囲（`[OffsetBytes, OffsetBytes + SizeBytes)`）に限定した `AlignedDiskStream`、NBD プロトコル層は `NBD_CMD_READ` のみ許可し `NBD_CMD_WRITE` 等は `EROFS (30)` で拒否、Linux 側マウント時は `-o ro,noload`（必要に応じ `ro`）でマウントします。
   - **CLI / GUI 双方でのライフサイクル管理**: GUI では `InProcessNbdBridgeProvider` がバックグラウンドタスクで NBD 要求を処理し、CLI では `DetachedProcessNbdBridgeProvider` が常駐用サブプロセス（`__nbd-daemon`）を起動して即時コマンドプロンプトへ戻ります。アンマウント時は `/dev/nbd*` デバイスを自動検出し、`umount /mnt/wsl/<name>` 後に `NBD_DISCONNECT` / `NBD_CLEAR_QUE` / `NBD_CLEAR_SOCK` を送信して安全に終了します。
@@ -123,14 +124,14 @@ Windows 11環境でLinuxパーティションをRead-Onlyマウントするに�
 ### 4.1 ソリューション構成
 
 ```text
-LinuxRoDrive/
-├── LinuxRoDrive.sln
+WslDrive/
+├── WslDrive.sln
 ├── README.md
 ├── docs/
 │   ├── architecture_and_plan.md          # 本設計・計画書
 │   └── testing_and_usage_guide.md        # ビルド・CLI/GUI利用・テスト手順書
 ├── src/
-│   ├── LinuxRoDrive.Core/                # 共通コアライブラリ (net8.0-windows)
+│   ├── WslDrive.Core/                # 共通コアライブラリ (net8.0-windows)
 │   │   ├── Models/
 │   │   │   ├── LinuxFileSystemType.cs    # FS種別列挙体 (Ext2/3/4, Btrfs, Xfs等)
 │   │   │   ├── PartitionEntry.cs         # パーティション情報 (開始セクタ/FS/Label/UUID)
@@ -149,10 +150,10 @@ LinuxRoDrive/
 │   │   └── Interop/
 │   │       ├── NativeMethods.cs          # Win32 API P/Invoke 定義
 │   │       └── DriveMapper.cs            # UAC透過ドライブレター割当・解除・Explorer通知
-│   ├── LinuxRoDrive.Cli/                 # コンソールアプリ (list / mount / unmount / status)
-│   └── LinuxRoDrive.App/                 # WPF GUI + タスクトレイアプリ (app.manifestで管理者昇格)
+│   ├── WslDrive.Cli/                 # コンソールアプリ (list / mount / unmount / status)
+│   └── WslDrive.App/                 # WPF GUI + タスクトレイアプリ (app.manifestで管理者昇格)
 └── tests/
-    └── LinuxRoDrive.Tests/               # xUnit 単体テスト
+    └── WslDrive.Tests/               # xUnit 単体テスト
 ```
 
 ### 4.2 コンポーネント関連図
@@ -160,11 +161,11 @@ LinuxRoDrive/
 ```mermaid
 flowchart TD
     subgraph UI["プレゼンテーション層"]
-        CLI["LinuxRoDrive.Cli\n(CLIツール)"]
-        APP["LinuxRoDrive.App\n(WPF GUI + タスクトレイ)"]
+        CLI["WslDrive.Cli\n(CLIツール)"]
+        APP["WslDrive.App\n(WPF GUI + タスクトレイ)"]
     end
 
-    subgraph Core["LinuxRoDrive.Core (net8.0-windows)"]
+    subgraph Core["WslDrive.Core (net8.0-windows)"]
         Scanner["DiskScanner\n(WMI + Raw Disk列挙)"]
         PT["PartitionTableReader\n(GPT / MBR / EBR解析)"]
         SB["SuperblockInspector\n(ext4 / btrfs / xfs解析)"]
@@ -211,15 +212,15 @@ sequenceDiagram
     Scanner-->>UI: パーティション一覧 (ext4, Label, UUID, Size)
 
     User->>UI: 2. PhysicalDrive1 Partition 2 を L: にマウント要求
-    UI->>Wsl: wsl.exe --mount \\.\PhysicalDrive1 --partition 2 --name linuxro_d1p2 --type ext4 --options "ro,noload"
-    Wsl-->>UI: /mnt/wsl/linuxro_d1p2 にマウント成功
+    UI->>Wsl: wsl.exe --mount \\.\PhysicalDrive1 --partition 2 --name wsldrive_d1p2 --type ext4 --options "ro,noload"
+    Wsl-->>UI: /mnt/wsl/wsldrive_d1p2 にマウント成功
 
     UI->>Wsl: 既定WSLディストロ名を取得 (例: Ubuntu)
-    Wsl-->>UI: UNCパス確定: \\wsl.localhost\Ubuntu\mnt\wsl\linuxro_d1p2
+    Wsl-->>UI: UNCパス確定: \\wsl.localhost\Ubuntu\mnt\wsl\wsldrive_d1p2
 
     UI->>Mapper: 3. explorer.exe非昇格トークン偽装 + 管理者セッションの双方で L: にUNCパスを割当
     Mapper->>Exp: ImpersonateLoggedOnUser + DefineDosDeviceW(0, "L:", uncPath) + SHChangeNotify(DRIVEADD)
-    Mapper-->>UI: L: ドライブ割り当て完了 (\??\UNC\wsl.localhost\Ubuntu\mnt\wsl\linuxro_d1p2)
+    Mapper-->>UI: L: ドライブ割り当て完了 (\??\UNC\wsl.localhost\Ubuntu\mnt\wsl\wsldrive_d1p2)
 
     User->>Exp: 4. エクスプローラーまたはターミナルで L:\ を開いて透過的に閲覧
 ```
@@ -253,9 +254,9 @@ sequenceDiagram
 
 ## 6. テスト計画
 
-1. **単体テスト (`LinuxRoDrive.Tests`)**
+1. **単体テスト (`WslDrive.Tests`)**
    - `SuperblockInspectorTests`: `mkfs.ext4` 相当のスーパーブロックバイト列（ext2 / ext3 / ext4判定、ラベル、UUID）および Btrfs / XFS / Swap / LUKS ヘッダの解析検証。
    - `PartitionTableReaderTests`: 擬似GPT/MBRディスクストリーム（プロテクティブMBR + GPTパーティションエントリ + 内部ext4スーパーブロック）からの正確なパーティション列挙検証。
-   - `WslMountServiceTests`: `ro,noload` / `ro` 引数組み立て、UTF-16LEデコード、`/proc/mounts` パース、`QueryDosDeviceW` ターゲットパス（`\??\UNC\...` / `\Device\P9Rdr\;...`）から標準UNCパスへの逆変換検証。
+   - `WslMountServiceTests`: `ro,noload` / `ro` / `rw` 引数組み立て、UTF-16LEデコード、`/proc/mounts` パース（RO/RW判定）、`QueryDosDeviceW` ターゲットパス（`\??\UNC\...` / `\Device\P9Rdr\;...`）から標準UNCパスへの逆変換、および NBD ブリッジでの RW 拒否検証。
 2. **実イメージ検証・Windows 11結合テスト**
-   - 実 `.vhdx` またはテスト用物理ドライブを使ったマウント〜エクスプローラー閲覧〜Read-Only保護確認〜アンマウントの手順を `docs/testing_and_usage_guide.md` にまとめ、実機で確認する。
+   - 実 `.vhdx` またはテスト用物理ドライブを使ったマウント（RO 保護確認および RW 読み書き確認）〜エクスプローラー閲覧〜アンマウントの手順を `docs/testing_and_usage_guide.md` にまとめ、実機で確認する。
